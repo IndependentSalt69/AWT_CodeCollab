@@ -54,4 +54,25 @@ Developers often need to collaborate on code in real time — for pair programmi
 
 ---
 
-## 📁 Project Structure
+## 📁 Project Structures
+
+codecollab/
+├── docker-compose.yml
+├── client/ # React + TypeScript frontend
+│ └── src/
+│ ├── components/ # editor, chat, terminal, room UI
+│ ├── pages/ # Login, Signup, Dashboard, Room, History
+│ ├── hooks/ # useSocket, useAuth, useRoom
+│ ├── context/ # AuthContext, SocketContext
+│ └── services/ # REST + socket client setup
+├── server/ # Node.js + Express backend
+│ └── src/
+│ ├── models/ # User, Room, Message, ExecutionRun
+│ ├── routes/ # /auth, /rooms, /execute, /history
+│ ├── controllers/ # Route handlers
+│ ├── sockets/ # chat, editorSync, presence, typing
+│ └── execution/ # Docker-based code execution engine
+├── runners/ # Dockerfiles for Python, Java, C++ sandboxes
+├── docs/ # Architecture decisions, API spec
+├── demo/ # Seed data & demo walkthrough
+└── eval/ # Load & security testing notes
