@@ -1,0 +1,16 @@
+version: '3.8'
+services:
+  server:
+    build: ./server
+    ports:
+      - "3000:3000"
+    environment:
+      - MONGO_URI=mongodb://mongo:27017/codecollab
+    depends_on:
+      - mongo
+  mongo:
+    image: mongo:6
+    restart: unless-stopped
+  runner-python:
+    build: ./runners/python
+    restart: "no"
