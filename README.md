@@ -76,3 +76,103 @@ codecollab/
 ├── docs/ # Architecture decisions, API spec
 ├── demo/ # Seed data & demo walkthrough
 └── eval/ # Load & security testing notes
+
+---
+
+## ⚙️ Getting Started
+
+### Prerequisites
+- [Node.js](https://nodejs.org/) v18+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+- [MongoDB](https://www.mongodb.com/) (local or Atlas)
+- [Redis](https://redis.io/) (local or via Docker)
+- Git
+
+### Installation
+
+```bash
+# Clone the repository
+git clone https://github.com/<your-username>/codecollab.git
+cd codecollab
+
+# Install backend dependencies
+cd server
+npm install
+
+# Install frontend dependencies
+cd ../client
+npm install
+```
+
+### Environment Variables
+
+Create a `.env` file in `server/` based on `.env.example`:
+
+```env
+PORT=5000
+MONGO_URI=mongodb://localhost:27017/codecollab
+JWT_SECRET=your_jwt_secret
+REDIS_URL=redis://localhost:6379
+CLIENT_URL=http://localhost:3000
+```
+
+### Running Locally
+
+```bash
+# Start backend
+cd server
+npm run dev
+
+# Start frontend (in a separate terminal)
+cd client
+npm start
+```
+
+Or, once Docker Compose is configured:
+
+```bash
+docker-compose up --build
+```
+
+Visit `http://localhost:3000` to use the app.
+
+---
+
+## 🧪 Running Tests
+
+```bash
+cd server
+npm test
+```
+
+---
+
+## 🔒 Security Notes
+
+Each code submission runs in a fresh, isolated Docker container with:
+- No network access (`--network none`)
+- CPU and memory limits
+- Execution timeout enforcement
+- No access to the host filesystem beyond a temporary code file
+
+See [`docs/security-notes.md`](./docs/security-notes.md) for full sandbox hardening details.
+
+---
+
+## 🗺️ Roadmap
+
+- [ ] Auth & session handling
+- [ ] Room creation & join-by-link
+- [ ] Real-time chat with typing indicators
+- [ ] Live shared code editor
+- [ ] Multi-language sandboxed execution (Python, Java, C++)
+- [ ] Execution history per room/user
+- [ ] Cloud deployment
+
+---
+
+## 📄 License
+
+This project is for academic purposes as part of a semester-scale full-stack development project.
+
+---
