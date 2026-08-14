@@ -57,7 +57,7 @@ Developers often need to collaborate on code in real time — for pair programmi
 ## 📁 Project Structure
 
 ```
-codecollab/
+CodeCollab/
 ├── docker-compose.yml
 ├── client/                # React + TypeScript frontend
 │   └── src/
