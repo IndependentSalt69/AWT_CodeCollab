@@ -92,7 +92,7 @@ CodeCollab/
 
 ```bash
 # Clone the repository
-git clone https://github.com/<your-username>/codecollab.git
+git clone https://github.com/IndependentSalt69/AWT_CodeCollab
 cd codecollab
 
 # Install backend dependencies
