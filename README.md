@@ -6,13 +6,13 @@ CodeCollab combines the functionality of an online compiler with a real-time mes
 
 ---
 
-## 🚀 Problem Statement
+## Problem Statement
 
 Developers often need to collaborate on code in real time — for pair programming, technical interviews, teaching, or debugging together — but existing solutions either rely on third-party platforms, lack live communication, or don't support secure server-side code execution. CodeCollab builds this experience from the ground up.
 
 ---
 
-## ✨ Features
+## Features
 
 - **User Authentication & Authorization** — secure signup/login with JWT-based sessions
 - **Coding Rooms** — create a room and invite others via a shareable link
@@ -28,7 +28,7 @@ Developers often need to collaborate on code in real time — for pair programmi
 
 ---
 
-## 🛠️ Tech Stack
+## Tech Stack
 
 **Frontend**
 - React 18 + TypeScript
@@ -54,7 +54,7 @@ Developers often need to collaborate on code in real time — for pair programmi
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 CodeCollab/
@@ -79,7 +79,7 @@ CodeCollab/
 └── eval/                   # Load & security testing notes
 ```
 
-## ⚙️ Getting Started
+## Getting Started
 
 ### Prerequisites
 - [Node.js](https://nodejs.org/) v18+
@@ -138,7 +138,7 @@ Visit `http://localhost:3000` to use the app.
 
 ---
 
-## 🧪 Running Tests
+## Running Tests
 
 ```bash
 cd server
@@ -147,7 +147,7 @@ npm test
 
 ---
 
-## 🔒 Security Notes
+## Security Notes
 
 Each code submission runs in a fresh, isolated Docker container with:
 - No network access (`--network none`)
@@ -159,7 +159,7 @@ See [`docs/security-notes.md`](./docs/security-notes.md) for full sandbox harden
 
 ---
 
-## 🗺️ Roadmap
+## Roadmap
 
 - [ ] Auth & session handling
 - [ ] Room creation & join-by-link
@@ -171,7 +171,7 @@ See [`docs/security-notes.md`](./docs/security-notes.md) for full sandbox harden
 
 ---
 
-## 📄 License
+## License
 
 This project is for academic purposes as part of a semester-scale full-stack development project.
 
