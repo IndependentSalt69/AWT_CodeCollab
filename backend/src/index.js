@@ -1,11 +1,16 @@
+require('dotenv').config();
+
 const express = require('express');
 const cors = require('cors');
 const http = require('http');
+const connectDB = require('./config/db');
 
 const { initRealtimeServer } = require('../../realtime/server');
 
 const app = express();
 const httpServer = http.createServer(app);
+
+connectDB();
 
 // Middleware
 app.use(cors({
