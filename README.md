@@ -58,25 +58,73 @@ Developers often need to collaborate on code in real time — for pair programmi
 
 ```
 CodeCollab/
-├── docker-compose.yml
-├── client/                # React + TypeScript frontend
-│   └── src/
-│       ├── components/    # editor, chat, terminal, room UI
-│       ├── pages/         # Login, Signup, Dashboard, Room, History
-│       ├── hooks/         # useSocket, useAuth, useRoom
-│       ├── context/       # AuthContext, SocketContext
-│       └── services/      # REST + socket client setup
-├── server/                # Node.js + Express backend
-│   └── src/
-│       ├── models/        # User, Room, Message, ExecutionRun
-│       ├── routes/        # /auth, /rooms, /execute, /history
-│       ├── controllers/   # Route handlers
-│       ├── sockets/       # chat, editorSync, presence, typing
-│       └── execution/     # Docker-based code execution engine
-├── runners/                # Dockerfiles for Python, Java, C++ sandboxes
-├── docs/                   # Architecture decisions, API spec
-├── demo/                   # Seed data & demo walkthrough
-└── eval/                   # Load & security testing notes
+│
+├── frontend/                       # React + TypeScript frontend
+│   ├── src/
+│   │   ├── components/             # editor, chat, terminal, room
+│   │   ├── pages/                  # Login, Signup, Dashboard, Room, History
+│   │   ├── hooks/
+│   │   ├── context/
+│   │   ├── services/
+│   │   ├── types/
+│   │   └── App.tsx
+│   └── package.json
+│
+├── backend/                        # Node.js + Express backend API
+│   ├── src/
+│   │   ├── routes/
+│   │   ├── controllers/
+│   │   ├── middleware/
+│   │   ├── services/
+│   │   ├── config/
+│   │   └── index.js
+│   └── package.json
+│
+├── database/                       # Database models and seed scripts
+│   ├── models/                     # User, Room, Message, ExecutionRun
+│   ├── seeds/
+│   └── README.md
+│
+├── realtime/                       # Real-time WebSocket layer
+│   ├── server/                     # Socket handlers (rooms, editorSync, presence, chat, typing)
+│   ├── client/                     # Socket client instance & event constants
+│   └── protocol/                   # Socket event specification
+│
+├── execution/                      # Code execution engine & sandboxes
+│   ├── engine/                     # executeCode, executor, queue, resultParser, sandboxConfig
+│   ├── runners/                    # Dockerfiles & runners for python, java, cpp
+│   └── README.md
+│
+├── infrastructure/                 # Deployment & orchestration
+│   ├── docker/
+│   ├── docker-compose.yml
+│   ├── .env.example
+│   └── deployment/
+│
+├── testing/                        # Test suites
+│   ├── backend/
+│   ├── realtime/
+│   ├── execution/
+│   ├── frontend/
+│   └── security/
+│
+├── docs/                           # Architecture, API & security documentation
+│   ├── architecture.md
+│   ├── api-spec.md
+│   ├── socket-events.md
+│   └── security-notes.md
+│
+├── demo/                           # Demo walkthrough and seed data
+│   ├── seed_users.js
+│   ├── seed_rooms.js
+│   └── demo_script.md
+│
+├── eval/                           # Security & load evaluation notes
+│   ├── sandbox_escape_tests.md
+│   └── load_test_notes.md
+│
+├── README.md
+└── CURRENT_STATUS.md
 ```
 
 ## Getting Started
@@ -92,21 +140,21 @@ CodeCollab/
 
 ```bash
 # Clone the repository
-git clone https://github.com/IndependentSalt69/AWT_CodeCollab
-cd codecollab
+git clone https://github.com/IndependentSalt69/AWT_2026.git
+cd AWT_2026
 
 # Install backend dependencies
-cd server
+cd backend
 npm install
 
 # Install frontend dependencies
-cd ../client
+cd ../frontend
 npm install
 ```
 
 ### Environment Variables
 
-Create a `.env` file in `server/` based on `.env.example`:
+Create a `.env` file based on `infrastructure/.env.example`:
 
 ```env
 PORT=5000
@@ -120,18 +168,18 @@ CLIENT_URL=http://localhost:3000
 
 ```bash
 # Start backend
-cd server
+cd backend
 npm run dev
 
 # Start frontend (in a separate terminal)
-cd client
-npm start
+cd frontend
+npm run dev
 ```
 
-Or, once Docker Compose is configured:
+Or, using Docker Compose from the infrastructure directory:
 
 ```bash
-docker-compose up --build
+docker-compose -f infrastructure/docker-compose.yml up --build
 ```
 
 Visit `http://localhost:3000` to use the app.
@@ -141,7 +189,7 @@ Visit `http://localhost:3000` to use the app.
 ## Running Tests
 
 ```bash
-cd server
+cd backend
 npm test
 ```
 
