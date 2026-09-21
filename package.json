@@ -1,28 +1,18 @@
 {
-  "name": "awt_2026",
+  "name": "codecollab",
   "version": "1.0.0",
+  "private": true,
   "description": "A full-stack web application that lets multiple users create shared coding rooms, communicate via real-time chat, and compile/execute code together in Python, Java, and C++ — all from the browser, with no third-party compiler APIs.",
-  "main": "index.js",
-  "directories": {
-    "doc": "docs"
-  },
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/IndependentSalt69/AWT_2026.git"
+    "url": "git+https://github.com/IndependentSalt69/AWT_CodeCollab.git"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "commonjs",
-  "bugs": {
-    "url": "https://github.com/IndependentSalt69/AWT_2026/issues"
-  },
-  "homepage": "https://github.com/IndependentSalt69/AWT_2026#readme",
-  "dependencies": {
-    "socket.io": "^4.8.3",
-    "socket.io-client": "^4.8.3"
-  }
+  "type": "commonjs"
 }
