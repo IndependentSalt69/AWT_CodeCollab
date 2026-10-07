@@ -2,6 +2,7 @@ export const SOCKET_EVENTS = {
   ROOM: {
     JOIN: 'room:join',
     LEAVE: 'room:leave',
+    MEMBERS: 'room:members',
     USER_JOINED: 'room:user_joined',
     USER_LEFT: 'room:user_left',
   },

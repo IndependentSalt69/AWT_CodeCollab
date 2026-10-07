@@ -6,11 +6,16 @@ import {
   SOCKET_EVENTS,
 } from '../../realtime/client/events';
 
+type RoomMember = {
+  socketId: string;
+  user?: { name?: string; username?: string };
+};
+
 export default function App() {
   const [backendStatus, setBackendStatus] = useState<string>('checking...');
   const [socketStatus, setSocketStatus] = useState<string>('disconnected');
   const [roomStatus, setRoomStatus] = useState<string>('not joined');
-  const [roomMembers, setRoomMembers] = useState<string[]>([]);
+  const [roomMembers, setRoomMembers] = useState<RoomMember[]>([]);
 
   useEffect(() => {
     fetch('http://localhost:5000/health')
@@ -51,6 +56,7 @@ export default function App() {
       console.log('Socket disconnected:', reason);
       setSocketStatus('disconnected');
       setRoomStatus('not joined');
+      setRoomMembers([]);
     };
 
     const handleConnectError = (error: Error) => {
@@ -58,43 +64,28 @@ export default function App() {
       setSocketStatus('error');
     };
 
-    const handleUserJoined = ({
-      user,
-      socketId,
-    }: {
-      user?: { name?: string };
-      socketId?: string;
-    }) => {
-      console.log('User joined:', user, socketId);
+    const handleMembers = (snapshot: { roomId: string; members: RoomMember[] }) => {
+      if (snapshot.roomId === roomId) {
+        setRoomMembers(snapshot.members.filter((member) => member.socketId !== socket.id));
+      }
+    };
 
-      const memberName = user?.name || socketId || 'Unknown user';
-
+    const handleUserJoined = (member: RoomMember) => {
       setRoomMembers((current) =>
-        current.includes(memberName)
-          ? current
-          : [...current, memberName]
+        [...current.filter((existing) => existing.socketId !== member.socketId), member]
       );
     };
 
-    const handleUserLeft = ({
-      user,
-      socketId,
-    }: {
-      user?: { name?: string };
-      socketId?: string;
-    }) => {
-      console.log('User left:', user, socketId);
-
-      const memberName = user?.name || socketId || 'Unknown user';
-
+    const handleUserLeft = ({ socketId }: RoomMember) => {
       setRoomMembers((current) =>
-        current.filter((member) => member !== memberName)
+        current.filter((member) => member.socketId !== socketId)
       );
     };
 
     socket.on('connect', handleConnect);
     socket.on('disconnect', handleDisconnect);
     socket.on('connect_error', handleConnectError);
+    socket.on(SOCKET_EVENTS.ROOM.MEMBERS, handleMembers);
 
     socket.on(
       SOCKET_EVENTS.ROOM.USER_JOINED,
@@ -108,12 +99,15 @@ export default function App() {
 
     if (!socket.connected) {
       socket.connect();
+    } else {
+      handleConnect();
     }
 
     return () => {
       socket.off('connect', handleConnect);
       socket.off('disconnect', handleDisconnect);
       socket.off('connect_error', handleConnectError);
+      socket.off(SOCKET_EVENTS.ROOM.MEMBERS, handleMembers);
 
       socket.off(
         SOCKET_EVENTS.ROOM.USER_JOINED,
@@ -131,8 +125,8 @@ export default function App() {
           user,
         });
 
-        socket.disconnect();
       }
+      socket.disconnect();
     };
   }, []);
 
@@ -159,7 +153,7 @@ export default function App() {
       ) : (
         <ul>
           {roomMembers.map((member) => (
-            <li key={member}>{member}</li>
+            <li key={member.socketId}>{member.user?.name || member.user?.username || member.socketId}</li>
           ))}
         </ul>
       )}

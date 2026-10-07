@@ -4,13 +4,22 @@ This document details the Socket.IO event contract between the CodeCollab client
 
 ## 1. Room Events
 - **`room:join`** (Client → Server)
-  - Payload: `{ roomId: string, user: { id: string, username: string } }`
+  - Payload: `{ roomId: string, user: { name?: string, id?: string, username?: string } }`
+  - Acknowledgment: `{ ok: true, roomId: string, socketId: string }` or `{ ok: false, error: string }` for an invalid room ID.
+  - Every successful join (including a repeated join) sends a snapshot to the joining socket. Repeated joins do not broadcast another arrival.
+- **`room:members`** (Server → Joining Client)
+  - Payload: `{ roomId: string, members: Array<{ socketId: string, user: object }> }`
+  - Complete membership snapshot including the joining client, sent before the join acknowledgment. The UI excludes its own socket ID when displaying other members.
+  - Members are identified by socket ID; separate tabs with the same name remain separate members. The current in-memory adapter tracks membership on one server process.
 - **`room:user_joined`** (Server → Room Broadcast)
-  - Payload: `{ user: { id: string, username: string }, socketId: string }`
+  - Payload: `{ user: object, socketId: string }`
 - **`room:leave`** (Client → Server)
-  - Payload: `{ roomId: string, user: { id: string, username: string } }`
+  - Payload: `{ roomId: string }` (a legacy `user` field is accepted but ignored).
+  - Acknowledgment: `{ ok: true, roomId: string, socketId: string }` or `{ ok: false, error: string }` for an invalid room ID.
 - **`room:user_left`** (Server → Room Broadcast)
-  - Payload: `{ user: { id: string, username: string }, socketId: string }`
+  - Payload: `{ user: object, socketId: string }`
+  - Join/leave notifications go only to other clients in that room and preserve the user object provided on join (including `name`, if supplied).
+  - Explicit leave and disconnect both notify remaining members using the stored user. Leaving an unjoined room has no broadcast; an explicit leave followed by disconnect does not duplicate the notification.
 
 ## 2. Editor Synchronization Events
 - **`editor:change`** (Client/Driver → Server)
