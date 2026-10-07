@@ -2,6 +2,10 @@
   "name": "codecollab",
   "version": "1.0.0",
   "private": true,
+  "scripts": {
+    "test:realtime": "jest --runInBand testing/realtime",
+    "build": "npm run build --workspace frontend"
+  },
   "description": "A full-stack web application that lets multiple users create shared coding rooms, communicate via real-time chat, and compile/execute code together in Python, Java, and C++ — all from the browser, with no third-party compiler APIs.",
   "workspaces": [
     "backend",
