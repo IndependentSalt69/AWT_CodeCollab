@@ -12,6 +12,10 @@ const sandboxConfig = require('./sandboxConfig');
  * @returns {Promise<Object>} Execution result (stdout, stderr, exitCode, executionTimeMs)
  */
 module.exports = async function executeCode(runSpec) {
+  if (!runSpec || typeof runSpec !== 'object') {
+    throw new Error('Language and code are required for execution');
+  }
+
   const { language, code, timeout = sandboxConfig.timeoutMs, memory = sandboxConfig.memory } = runSpec;
 
   if (!language || !code) {
