@@ -5,6 +5,7 @@ import {
 import {
   SOCKET_EVENTS,
 } from '../../realtime/client/events';
+import CodeEditor from './components/editor/CodeEditor';
 
 type RoomMember = {
   socketId: string;
@@ -27,6 +28,10 @@ export default function App() {
   const [myId, setMyId] = useState<string>('');
   const [myName, setMyName] = useState<string>('');
   const [transferStatus, setTransferStatus] = useState<string>('');
+  const [code, setCode] = useState<string>(
+    '// CodeCollab Editor Preview\n// Active driver can edit; viewers are read-only.\n\nfunction main() {\n  console.log("Hello from CodeCollab!");\n}\n'
+  );
+  const [language, setLanguage] = useState<string>('javascript');
   const socketRef = useRef<any>(null);
 
   const isDriver = myId && driverId === myId;
@@ -175,7 +180,7 @@ export default function App() {
   };
 
   return (
-    <div style={{ fontFamily: 'sans-serif', padding: '2rem', maxWidth: '750px', margin: '0 auto', color: '#1e293b' }}>
+    <div style={{ fontFamily: 'sans-serif', padding: '2rem', maxWidth: '900px', margin: '0 auto', color: '#1e293b' }}>
       <h1 style={{ fontSize: '1.75rem', marginBottom: '1.25rem' }}>CodeCollab — Collaborative Coding Platform</h1>
 
       <div style={{ background: '#f8fafc', padding: '1.25rem', borderRadius: '8px', border: '1px solid #e2e8f0', marginBottom: '1.5rem' }}>
@@ -190,6 +195,56 @@ export default function App() {
         </p>
         <p style={{ margin: '0.3rem 0' }}>Active Driver Socket: <code style={{ background: '#e2e8f0', padding: '2px 6px', borderRadius: '4px' }}>{driverId || 'None'}</code></p>
         {transferStatus && <p style={{ fontSize: '0.9rem', color: '#64748b', marginTop: '0.5rem' }}>{transferStatus}</p>}
+      </div>
+
+      {/* Editor Section */}
+      <div style={{ marginBottom: '1.5rem', background: '#ffffff', padding: '1.25rem', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <h3 style={{ margin: 0 }}>Code Editor</h3>
+            <span
+              style={{
+                fontSize: '0.8rem',
+                padding: '2px 8px',
+                borderRadius: '4px',
+                background: isDriver ? '#dcfce7' : '#f1f5f9',
+                color: isDriver ? '#15803d' : '#475569',
+                fontWeight: 600,
+              }}
+            >
+              {isDriver ? '✍️ Editing Enabled' : '🔒 Read-Only (Viewer)'}
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <label htmlFor="lang-select" style={{ fontSize: '0.85rem', fontWeight: 600 }}>Language:</label>
+            <select
+              id="lang-select"
+              value={language}
+              onChange={(e) => setLanguage(e.target.value)}
+              style={{
+                padding: '4px 8px',
+                borderRadius: '4px',
+                border: '1px solid #cbd5e1',
+                fontSize: '0.85rem',
+                background: '#fff',
+              }}
+            >
+              <option value="javascript">JavaScript</option>
+              <option value="python">Python</option>
+              <option value="java">Java</option>
+              <option value="cpp">C++</option>
+            </select>
+          </div>
+        </div>
+
+        <CodeEditor
+          value={code}
+          language={language}
+          readOnly={!isDriver}
+          onChange={(val) => setCode(val || '')}
+          height="350px"
+        />
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
