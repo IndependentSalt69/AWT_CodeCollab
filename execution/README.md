@@ -1,11 +1,17 @@
 # Execution Engine & Runners
 
-This directory houses the containerized code execution subsystem for CodeCollab.
+This directory houses the containerized code execution subsystem and Redis-backed execution queue for CodeCollab.
 
-## Architecture (M0.5b)
+## Architecture (M0.5c)
 
 ```text
-Code Submission (executeCode.js)
+Code Submission
+      ↓
+BullMQ Execution Queue (queue.js)  <--->  Redis (REDIS_URL / localhost:6379)
+      ↓
+Worker Pool (Bounded Concurrency: 2–4 workers)
+      ↓
+Execution Engine (executeCode.js)
       ↓
 Dockerode Sandbox Orchestrator (executor.js)
       ↓
@@ -20,6 +26,8 @@ Timeout Monitor (Race: container.wait() vs 5000ms setTimeout SIGKILL)
 Result Parser (resultParser.js -> stdout, stderr, exitCode, executionTimeMs, status)
       ↓
 Ephemeral Container Cleanup (container.remove({ force: true }))
+      ↓
+Job Result Propagation (job.waitUntilFinished / event stream)
 ```
 
 ---
@@ -28,13 +36,32 @@ Ephemeral Container Cleanup (container.remove({ force: true }))
 
 - `executeCode.js` — Main execution entry point. Validates language/code specifications and coordinates sandboxed execution.
 - `executor.js` — Real Dockerode-based container orchestrator. Ephemerally provisions containers, enforces resource constraints, demultiplexes streams, handles timeouts, and guarantees container destruction.
-- `queue.js` — Asynchronous job queue interface *(in-memory stub; Redis + BullMQ integration targeted for M0.5c)*.
+- `queue.js` — Redis + BullMQ asynchronous job queue. Coordinates FIFO execution, bounded concurrency (2–4 simultaneous jobs), failure isolation, and lifecycle management.
 - `resultParser.js` — Normalizes stdout, stderr, execution time, and process exit code into a structured result object (`status`: `'completed'`, `'failed'`, or `'timeout'`).
 - `sandboxConfig.js` — Default resource configuration (CPU: 0.5, Memory: 256MB, Timeout: 5000ms, Network: disabled).
 
 ---
 
-## 2. Docker Container Sandboxing & Security (M0.5b)
+## 2. Redis + BullMQ Queue & Worker Architecture (M0.5c)
+
+- **Job Queue (`EXECUTION_QUEUE_NAME = 'codecollab-execution-queue'`):**
+  - Connects to Redis using `REDIS_URL` (default: `redis://localhost:6379`).
+  - Accepts execution job payload: `{ language, code, timeout, memory, roomId, userId, enqueuedAt }`.
+- **Worker Concurrency & Rate Limiting:**
+  - Configurable worker concurrency (default `2`, target `2–4`).
+  - Limits simultaneous running Docker containers to avoid host CPU/memory starvation.
+  - Preserves FIFO job ordering.
+- **Worker Resiliency & Error Isolation:**
+  - User code syntax errors, runtime exceptions, and container timeouts resolve with structured failure results (`status: 'failed'` / `'timeout'`) rather than throwing unhandled exceptions or crashing the worker.
+  - Safe error event listeners prevent worker crashes on network blips.
+- **Lifecycle & Graceful Teardown:**
+  - `startWorker()` initializes the processing loop.
+  - `close()` cleanly drains and shuts down workers, queues, and event listeners.
+  - `ping()` performs quick health checks against the Redis instance.
+
+---
+
+## 3. Docker Container Sandboxing & Security (M0.5b)
 
 Each code run is executed inside an ephemeral container configured with the following isolation parameters:
 - **Memory Limit:** 256 MB (`Memory: 268435456`, `MemorySwap: 268435456`)
@@ -47,20 +74,16 @@ Each code run is executed inside an ephemeral container configured with the foll
 
 ---
 
-## 3. Python 3.11 Dynamic Runner (`execution/runners/python/`)
+## 4. Python 3.11 Dynamic Runner (`execution/runners/python/`)
 
 The Python 3.11 runner executes dynamic user-submitted code in an unbuffered environment under an unprivileged `sandbox` user.
 
 ### Input Methods Supported
-The runner searches for user code using the following prioritized hierarchy:
 1. **CLI Flag `--code`**: `python runner.py --code "print('hello')"` (used by Dockerode orchestrator).
 2. **CLI File Argument**: `python runner.py /path/to/script.py`.
 3. **Environment Variable `SUBMISSION_FILE`**: `SUBMISSION_FILE=/path/to/script.py python runner.py`.
 4. **Default Mount Path**: Looks for `/app/submission.py`, `/app/submission/code.py`, or `./submission.py`.
 5. **Environment Variable `SUBMISSION_CODE`**: `SUBMISSION_CODE="print('hello')" python runner.py`.
-
-### Stdin Data Support
-When executing a submission file, standard input (`sys.stdin`) is passed directly through to the running user program.
 
 ### Output & Exit Codes
 - **`stdout`**: Captured directly with unbuffered stream forwarding (`PYTHONUNBUFFERED=1` / `-u`).
@@ -74,27 +97,41 @@ docker build -t codecollab-runner-python:latest execution/runners/python
 
 ---
 
-## 4. Other Language Runners (`execution/runners/`)
+## 5. Other Language Runners (`execution/runners/`)
 
 - `java/` — OpenJDK 17 runner *(placeholder skeleton; orchestration scheduled for future milestone)*.
 - `cpp/` — GCC 13 runner *(placeholder skeleton; orchestration scheduled for future milestone)*.
 
 ---
 
-## 5. Verification Status (M0.5b)
+## 6. Verification Status (M0.5c)
 
-- **Dockerode Integration:** Verified working on host Docker daemon.
-- **Python Runner:** Image built and tested with dynamic code inputs.
-- **Integration Tests:** `testing/execution/execution.test.js` (13/13 passing).
-- **Unit Tests:** `testing/execution/python_runner.test.js` (12/12 passing).
-- **Full Test Suite:** 43/43 tests passing across backend, realtime, and execution modules.
+- **Redis + BullMQ Queue:** Verified with Redis 7 container on port 6379.
+- **Queue Test Suite:** `testing/execution/queue.test.js` (11/11 passing).
+- **Dockerode Orchestrator Tests:** `testing/execution/execution.test.js` (13/13 passing).
+- **Python Runner Unit Tests:** `testing/execution/python_runner.test.js` (12/12 passing).
+- **Full Test Suite:** 54/54 tests passing across all backend, realtime, and execution modules.
+
+### Local Verification Steps
+1. Start Redis:
+   ```bash
+   docker compose -f infrastructure/docker-compose.yml up -d redis
+   ```
+2. Run Execution & Queue Tests:
+   ```bash
+   npx jest testing/execution/
+   ```
+3. Run Full Test Suite:
+   ```bash
+   npx jest
+   ```
 
 ---
 
-## 6. Known Limitations (M0.5b)
+## 7. Known Limitations (M0.5c)
 
-- **C++ and Java Runners:** Remain static placeholders. Invoking non-Python languages in `executeCode` throws an unsupported language error.
-- **Queue Persistence:** `queue.js` is an in-memory stub; Redis + BullMQ integration is planned for M0.5c.
-- **Backend API & Socket:** Backend endpoint (`POST /api/execute`) and Socket.IO execution triggers are planned for M0.5d.
-- **Frontend Terminal:** Terminal UI output rendering component is planned for M0.5e.
+- **C++ and Java Runners:** Remain static placeholders. Invoking non-Python languages in `executeCode` or queue throws an unsupported language error.
+- **Backend API & Socket Integration:** REST API endpoint (`POST /api/execute`) and Socket.IO execution events are scheduled for M0.5d.
+- **Frontend Terminal UI:** Output display component is scheduled for M0.5e.
+
 
