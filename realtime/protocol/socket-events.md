@@ -21,15 +21,27 @@ This document details the Socket.IO event contract between the CodeCollab client
   - Join/leave notifications go only to other clients in that room and preserve the user object provided on join (including `name`, if supplied).
   - Explicit leave and disconnect both notify remaining members using the stored user. Leaving an unjoined room has no broadcast; an explicit leave followed by disconnect does not duplicate the notification.
 
-## 2. Editor Synchronization Events
+## 2. Editor Synchronization & Driver Lifecycle Events
 - **`editor:change`** (Client/Driver → Server)
   - Payload: `{ roomId: string, code: string, language: string, cursor?: object }`
+  - Edits are accepted and broadcast only from the active Driver. Edits from Viewers are ignored.
 - **`editor:update`** (Server → Room Broadcast)
   - Payload: `{ code: string, language: string, cursor?: object, updatedBy: string }`
-- **`editor:driver_change`** (Client/Owner → Server)
+- **`editor:driver_change`** (Client/Driver → Server)
   - Payload: `{ roomId: string, newDriverId: string }`
-- **`editor:driver_updated`** (Server → Room Broadcast)
-  - Payload: `{ driverId: string }`
+  - Acknowledgment: `{ ok: true, driverId: string }` or `{ ok: false, error: string }`.
+  - Allowed by current Driver to transfer control to another active room member.
+- **`editor:driver_updated`** (Server → Room Broadcast & Joining Client)
+  - Payload: `{ driverId: string, roomId?: string }`
+  - Broadcast whenever the active driver changes, or sent to a joining client to declare the current driver.
+
+### Driver Lifecycle State Machine
+1. **Room empty**: No driver assigned (`driverState` is `null`).
+2. **User A joins**: First user in room automatically becomes **Driver** (`editor:driver_updated` broadcast with User A's ID).
+3. **Users B & C join**: Subsequent joiners become **Viewers**; User A remains Driver.
+4. **Transfer Driver**: Current Driver transfers control to another room member via `editor:driver_change`. The target user becomes **Driver**; all others become **Viewers**.
+5. **Driver Disconnects/Leaves**: Server automatically promotes one of the remaining room members to **Driver** and broadcasts `editor:driver_updated`.
+6. **Last User Leaves**: When the room becomes empty, all driver state for the room is completely cleared.
 
 ## 3. Presence & Heartbeat Events
 - **`presence:ping`** (Client → Server)

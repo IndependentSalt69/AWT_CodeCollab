@@ -1,3 +1,5 @@
+const { handleUserJoin, handleUserLeave } = require('./driverState');
+
 module.exports = function registerRoomHandlers(io, socket) {
   const memberships = new Map();
   socket.data.roomMemberships = memberships;
@@ -15,6 +17,8 @@ module.exports = function registerRoomHandlers(io, socket) {
     memberships.set(roomId, user);
     socket.join(roomId);
 
+    const { driverId, isNewDriver } = handleUserJoin(roomId, socket.id, io);
+
     const members = [...(io.sockets.adapter.rooms.get(roomId) || [])]
       .map((socketId) => {
         const peer = io.sockets.sockets.get(socketId);
@@ -25,6 +29,12 @@ module.exports = function registerRoomHandlers(io, socket) {
       .filter(Boolean);
 
     socket.emit('room:members', { roomId, members });
+
+    if (isNewDriver) {
+      io.to(roomId).emit('editor:driver_updated', { driverId, roomId });
+    } else if (driverId) {
+      socket.emit('editor:driver_updated', { driverId, roomId });
+    }
 
     callback?.({
       ok: true,
@@ -56,6 +66,8 @@ module.exports = function registerRoomHandlers(io, socket) {
     memberships.delete(roomId);
     socket.leave(roomId);
 
+    const { driverId, driverChanged } = handleUserLeave(roomId, socket.id, io);
+
     callback?.({
       ok: true,
       roomId,
@@ -67,6 +79,10 @@ module.exports = function registerRoomHandlers(io, socket) {
         user,
         socketId: socket.id,
       });
+
+      if (driverChanged && driverId) {
+        io.to(roomId).emit('editor:driver_updated', { driverId, roomId });
+      }
     }
 
     console.log(`Socket ${socket.id} left room ${roomId}`);
@@ -74,7 +90,12 @@ module.exports = function registerRoomHandlers(io, socket) {
 
   socket.on('disconnecting', () => {
     for (const [roomId, user] of memberships) {
+      const { driverId, driverChanged } = handleUserLeave(roomId, socket.id, io);
       socket.to(roomId).emit('room:user_left', { user, socketId: socket.id });
+
+      if (driverChanged && driverId) {
+        socket.to(roomId).emit('editor:driver_updated', { driverId, roomId });
+      }
     }
     memberships.clear();
   });

@@ -4,6 +4,7 @@ const registerEditorHandlers = require('./editorSync');
 const registerPresenceHandlers = require('./presence');
 const registerChatHandlers = require('./chat');
 const registerTypingHandlers = require('./typing');
+const driverState = require('./driverState');
 
 function initRealtimeServer(httpServer, corsOptions) {
   const io = new Server(httpServer, {
@@ -25,4 +26,4 @@ function initRealtimeServer(httpServer, corsOptions) {
   return io;
 }
 
-module.exports = { initRealtimeServer };
+module.exports = { initRealtimeServer, driverState };
