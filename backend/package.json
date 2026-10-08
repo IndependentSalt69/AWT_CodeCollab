@@ -9,10 +9,12 @@
     "test": "jest"
   },
   "dependencies": {
+    "bullmq": "^6.3.11",
     "cors": "^2.8.6",
     "dockerode": "^5.0.1",
     "dotenv": "^16.4.5",
     "express": "^4.22.3",
+    "ioredis": "^6.0.0",
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.1.1",
     "socket.io": "^4.8.3"
