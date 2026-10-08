@@ -29,12 +29,14 @@ export default function App() {
   const [myName, setMyName] = useState<string>('');
   const [transferStatus, setTransferStatus] = useState<string>('');
   const [code, setCode] = useState<string>(
-    '// CodeCollab Editor Preview\n// Active driver can edit; viewers are read-only.\n\nfunction main() {\n  console.log("Hello from CodeCollab!");\n}\n'
+    '// Welcome to CodeCollab\n// Active driver writes code; viewers watch live updates in real time.\n\nfunction helloWorld() {\n  console.log("Hello from CodeCollab!");\n}\n\nhelloWorld();\n'
   );
   const [language, setLanguage] = useState<string>('javascript');
   const socketRef = useRef<any>(null);
+  const isIncomingUpdateRef = useRef<boolean>(false);
+  const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-  const isDriver = myId && driverId === myId;
+  const isDriver = Boolean(myId && driverId === myId);
 
   const addActivity = (text: string) => {
     const newItem: ActivityItem = {
@@ -43,6 +45,52 @@ export default function App() {
       timestamp: new Date().toLocaleTimeString(),
     };
     setActivityFeed((prev) => [newItem, ...prev].slice(0, 20));
+  };
+
+  const emitEditorChange = (newCode: string, newLang: string) => {
+    if (!socketRef.current || !socketRef.current.connected) return;
+    socketRef.current.emit(
+      SOCKET_EVENTS.EDITOR.CHANGE,
+      {
+        roomId: 'test-room',
+        code: newCode,
+        language: newLang,
+      },
+      (res: { ok: boolean; error?: string }) => {
+        if (!res?.ok) {
+          console.warn('editor:change rejected by server:', res?.error);
+        }
+      }
+    );
+  };
+
+  const handleCodeChange = (newCode: string | undefined) => {
+    const nextVal = newCode || '';
+    setCode(nextVal);
+
+    if (isIncomingUpdateRef.current) {
+      return;
+    }
+
+    if (!isDriver) return;
+
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
+
+    debounceTimerRef.current = setTimeout(() => {
+      emitEditorChange(nextVal, language);
+    }, 250);
+  };
+
+  const handleLanguageChange = (newLang: string) => {
+    setLanguage(newLang);
+    if (isDriver) {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+      emitEditorChange(code, newLang);
+    }
   };
 
   useEffect(() => {
@@ -130,6 +178,26 @@ export default function App() {
       setDriverId(payload.driverId);
     };
 
+    const handleEditorUpdate = (payload: {
+      code: string;
+      language: string;
+      cursor?: object;
+      updatedBy: string;
+    }) => {
+      if (payload.updatedBy === socket.id) return;
+
+      isIncomingUpdateRef.current = true;
+      if (payload.code !== undefined) {
+        setCode(payload.code);
+      }
+      if (payload.language) {
+        setLanguage(payload.language);
+      }
+      setTimeout(() => {
+        isIncomingUpdateRef.current = false;
+      }, 50);
+    };
+
     socket.on('connect', handleConnect);
     socket.on('disconnect', handleDisconnect);
     socket.on('connect_error', handleConnectError);
@@ -137,6 +205,7 @@ export default function App() {
     socket.on(SOCKET_EVENTS.ROOM.USER_JOINED, handleUserJoined);
     socket.on(SOCKET_EVENTS.ROOM.USER_LEFT, handleUserLeft);
     socket.on(SOCKET_EVENTS.EDITOR.DRIVER_UPDATED, handleDriverUpdated);
+    socket.on(SOCKET_EVENTS.EDITOR.UPDATE, handleEditorUpdate);
 
     if (!socket.connected) {
       socket.connect();
@@ -145,6 +214,10 @@ export default function App() {
     }
 
     return () => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+
       socket.off('connect', handleConnect);
       socket.off('disconnect', handleDisconnect);
       socket.off('connect_error', handleConnectError);
@@ -152,6 +225,7 @@ export default function App() {
       socket.off(SOCKET_EVENTS.ROOM.USER_JOINED, handleUserJoined);
       socket.off(SOCKET_EVENTS.ROOM.USER_LEFT, handleUserLeft);
       socket.off(SOCKET_EVENTS.EDITOR.DRIVER_UPDATED, handleDriverUpdated);
+      socket.off(SOCKET_EVENTS.EDITOR.UPDATE, handleEditorUpdate);
 
       if (socket.connected) {
         socket.emit(SOCKET_EVENTS.ROOM.LEAVE, {
@@ -221,13 +295,15 @@ export default function App() {
             <select
               id="lang-select"
               value={language}
-              onChange={(e) => setLanguage(e.target.value)}
+              disabled={!isDriver}
+              onChange={(e) => handleLanguageChange(e.target.value)}
               style={{
                 padding: '4px 8px',
                 borderRadius: '4px',
                 border: '1px solid #cbd5e1',
                 fontSize: '0.85rem',
-                background: '#fff',
+                background: !isDriver ? '#f1f5f9' : '#fff',
+                cursor: !isDriver ? 'not-allowed' : 'pointer',
               }}
             >
               <option value="javascript">JavaScript</option>
@@ -242,7 +318,7 @@ export default function App() {
           value={code}
           language={language}
           readOnly={!isDriver}
-          onChange={(val) => setCode(val || '')}
+          onChange={handleCodeChange}
           height="350px"
         />
       </div>
