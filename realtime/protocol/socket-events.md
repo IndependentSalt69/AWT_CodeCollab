@@ -24,9 +24,11 @@ This document details the Socket.IO event contract between the CodeCollab client
 ## 2. Editor Synchronization & Driver Lifecycle Events
 - **`editor:change`** (Client/Driver → Server)
   - Payload: `{ roomId: string, code: string, language: string, cursor?: object }`
-  - Edits are accepted and broadcast only from the active Driver. Edits from Viewers are ignored.
+  - Acknowledgment: `{ ok: true }` or `{ ok: false, error: string }`.
+  - Edits are validated (membership, string types, non-empty language) and accepted/broadcast only from the active Driver. Edits from Viewers or non-members are rejected with `{ ok: false, error: string }`.
 - **`editor:update`** (Server → Room Broadcast)
   - Payload: `{ code: string, language: string, cursor?: object, updatedBy: string }`
+  - Broadcast to peers in the room (sender does not receive its own update). Preserves code, language, cursor, and updatedBy.
 - **`editor:driver_change`** (Client/Driver → Server)
   - Payload: `{ roomId: string, newDriverId: string }`
   - Acknowledgment: `{ ok: true, driverId: string }` or `{ ok: false, error: string }`.
