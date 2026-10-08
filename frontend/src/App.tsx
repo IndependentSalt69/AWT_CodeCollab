@@ -11,17 +11,34 @@ type RoomMember = {
   user?: { name?: string; username?: string };
 };
 
+type ActivityItem = {
+  id: string;
+  text: string;
+  timestamp: string;
+};
+
 export default function App() {
   const [backendStatus, setBackendStatus] = useState<string>('checking...');
   const [socketStatus, setSocketStatus] = useState<string>('disconnected');
   const [roomStatus, setRoomStatus] = useState<string>('not joined');
   const [roomMembers, setRoomMembers] = useState<RoomMember[]>([]);
+  const [activityFeed, setActivityFeed] = useState<ActivityItem[]>([]);
   const [driverId, setDriverId] = useState<string | null>(null);
   const [myId, setMyId] = useState<string>('');
+  const [myName, setMyName] = useState<string>('');
   const [transferStatus, setTransferStatus] = useState<string>('');
   const socketRef = useRef<any>(null);
 
   const isDriver = myId && driverId === myId;
+
+  const addActivity = (text: string) => {
+    const newItem: ActivityItem = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      text,
+      timestamp: new Date().toLocaleTimeString(),
+    };
+    setActivityFeed((prev) => [newItem, ...prev].slice(0, 20));
+  };
 
   useEffect(() => {
     fetch('http://localhost:5000/health')
@@ -33,8 +50,10 @@ export default function App() {
     socketRef.current = socket;
 
     const roomId = 'test-room';
+    const generatedName = `User-${Math.random().toString(36).slice(2, 7)}`;
+    setMyName(generatedName);
     const user = {
-      name: `User-${Math.random().toString(36).slice(2, 7)}`,
+      name: generatedName,
     };
 
     const handleConnect = () => {
@@ -82,15 +101,23 @@ export default function App() {
     };
 
     const handleUserJoined = (member: RoomMember) => {
-      setRoomMembers((current) =>
-        [...current.filter((existing) => existing.socketId !== member.socketId), member]
-      );
+      if (member.socketId !== socket.id) {
+        const userName = member.user?.name || member.user?.username || member.socketId;
+        setRoomMembers((current) =>
+          [...current.filter((existing) => existing.socketId !== member.socketId), member]
+        );
+        addActivity(`🟢 ${userName} joined the room`);
+      }
     };
 
-    const handleUserLeft = ({ socketId }: RoomMember) => {
-      setRoomMembers((current) =>
-        current.filter((member) => member.socketId !== socketId)
-      );
+    const handleUserLeft = (member: RoomMember) => {
+      if (member.socketId !== socket.id) {
+        const userName = member.user?.name || member.user?.username || member.socketId;
+        setRoomMembers((current) =>
+          current.filter((m) => m.socketId !== member.socketId)
+        );
+        addActivity(`🔴 ${userName} left the room`);
+      }
     };
 
     const handleDriverUpdated = (payload: { driverId: string; roomId?: string }) => {
@@ -148,69 +175,130 @@ export default function App() {
   };
 
   return (
-    <div style={{ fontFamily: 'sans-serif', padding: '2rem', maxWidth: '700px', margin: '0 auto' }}>
-      <h1>CodeCollab — Collaborative Coding Platform</h1>
+    <div style={{ fontFamily: 'sans-serif', padding: '2rem', maxWidth: '750px', margin: '0 auto', color: '#1e293b' }}>
+      <h1 style={{ fontSize: '1.75rem', marginBottom: '1.25rem' }}>CodeCollab — Collaborative Coding Platform</h1>
 
-      <div style={{ background: '#f5f5f7', padding: '1rem', borderRadius: '8px', marginBottom: '1.5rem' }}>
-        <p>Backend Status: <strong>{backendStatus}</strong></p>
-        <p>Socket Status: <strong>{socketStatus}</strong></p>
-        <p>Room Status: <strong>{roomStatus}</strong></p>
-        <p>
+      <div style={{ background: '#f8fafc', padding: '1.25rem', borderRadius: '8px', border: '1px solid #e2e8f0', marginBottom: '1.5rem' }}>
+        <p style={{ margin: '0.3rem 0' }}>Backend Status: <strong>{backendStatus}</strong></p>
+        <p style={{ margin: '0.3rem 0' }}>Socket Status: <strong>{socketStatus}</strong></p>
+        <p style={{ margin: '0.3rem 0' }}>Room Status: <strong>{roomStatus}</strong></p>
+        <p style={{ margin: '0.3rem 0' }}>
           Your Role:{' '}
-          <strong style={{ color: isDriver ? '#10b981' : '#6366f1' }}>
-            {isDriver ? '⚡ Driver (Editing Enabled)' : '👀 Viewer (Read-only)'}
+          <strong style={{ color: isDriver ? '#059669' : '#4f46e5' }}>
+            {isDriver ? '👑 Driver (Editing Enabled)' : '👀 Viewer (Read-only)'}
           </strong>
         </p>
-        <p>Active Driver Socket: <code>{driverId || 'None'}</code></p>
-        {transferStatus && <p style={{ fontSize: '0.9rem', color: '#666' }}>{transferStatus}</p>}
+        <p style={{ margin: '0.3rem 0' }}>Active Driver Socket: <code style={{ background: '#e2e8f0', padding: '2px 6px', borderRadius: '4px' }}>{driverId || 'None'}</code></p>
+        {transferStatus && <p style={{ fontSize: '0.9rem', color: '#64748b', marginTop: '0.5rem' }}>{transferStatus}</p>}
       </div>
 
-      <h3>Room Members</h3>
-      {roomMembers.length === 0 ? (
-        <p>No other members in this room.</p>
-      ) : (
-        <ul style={{ listStyle: 'none', padding: 0 }}>
-          {roomMembers.map((member) => {
-            const memberIsDriver = member.socketId === driverId;
-            return (
-              <li
-                key={member.socketId}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  padding: '0.6rem 0.8rem',
-                  marginBottom: '0.5rem',
-                  border: '1px solid #e2e8f0',
-                  borderRadius: '6px',
-                }}
-              >
-                <span>
-                  <strong>{member.user?.name || member.user?.username || member.socketId}</strong>{' '}
-                  <span style={{ fontSize: '0.85rem', color: memberIsDriver ? '#10b981' : '#64748b' }}>
-                    ({memberIsDriver ? 'Driver' : 'Viewer'})
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+        {/* Active Users Section */}
+        <div style={{ background: '#ffffff', padding: '1.25rem', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+          <h3 style={{ marginTop: 0, marginBottom: '1rem', borderBottom: '1px solid #f1f5f9', paddingBottom: '0.5rem' }}>
+            Active Users
+          </h3>
+
+          <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+            {/* Current user */}
+            <li
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '0.6rem 0.8rem',
+                marginBottom: '0.5rem',
+                background: '#f1f5f9',
+                border: '1px solid #cbd5e1',
+                borderRadius: '6px',
+              }}
+            >
+              <span>
+                <strong>{myName || 'You'} (You)</strong>{' '}
+                <span>{isDriver ? '👑' : '👀'}</span>
+              </span>
+              <span style={{ fontSize: '0.8rem', fontWeight: 600, color: isDriver ? '#059669' : '#64748b' }}>
+                {isDriver ? 'Driver' : 'Viewer'}
+              </span>
+            </li>
+
+            {/* Other room members */}
+            {roomMembers.map((member) => {
+              const memberIsDriver = member.socketId === driverId;
+              const name = member.user?.name || member.user?.username || member.socketId;
+              return (
+                <li
+                  key={member.socketId}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '0.6rem 0.8rem',
+                    marginBottom: '0.5rem',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: '6px',
+                  }}
+                >
+                  <span>
+                    <strong>{name}</strong>{' '}
+                    <span>{memberIsDriver ? '👑' : '👀'}</span>
                   </span>
-                </span>
-                {isDriver && !memberIsDriver && (
-                  <button
-                    onClick={() => handleTransferDriver(member.socketId)}
-                    style={{
-                      padding: '4px 10px',
-                      background: '#4f46e5',
-                      color: '#fff',
-                      border: 'none',
-                      borderRadius: '4px',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    Transfer Driver
-                  </button>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      )}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <span style={{ fontSize: '0.8rem', color: memberIsDriver ? '#059669' : '#64748b' }}>
+                      {memberIsDriver ? 'Driver' : 'Viewer'}
+                    </span>
+                    {isDriver && !memberIsDriver && (
+                      <button
+                        onClick={() => handleTransferDriver(member.socketId)}
+                        style={{
+                          padding: '3px 8px',
+                          fontSize: '0.75rem',
+                          background: '#4f46e5',
+                          color: '#fff',
+                          border: 'none',
+                          borderRadius: '4px',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Transfer
+                      </button>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+
+        {/* Recent Activity Feed */}
+        <div style={{ background: '#ffffff', padding: '1.25rem', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+          <h3 style={{ marginTop: 0, marginBottom: '1rem', borderBottom: '1px solid #f1f5f9', paddingBottom: '0.5rem' }}>
+            Recent Activity
+          </h3>
+          {activityFeed.length === 0 ? (
+            <p style={{ color: '#94a3b8', fontStyle: 'italic', fontSize: '0.9rem' }}>No recent activity yet.</p>
+          ) : (
+            <ul style={{ listStyle: 'none', padding: 0, margin: 0, maxHeight: '320px', overflowY: 'auto' }}>
+              {activityFeed.map((item) => (
+                <li
+                  key={item.id}
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    padding: '0.5rem 0.6rem',
+                    borderBottom: '1px solid #f1f5f9',
+                    fontSize: '0.9rem',
+                  }}
+                >
+                  <span>{item.text}</span>
+                  <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>{item.timestamp}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
