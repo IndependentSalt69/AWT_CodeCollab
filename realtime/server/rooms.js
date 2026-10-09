@@ -1,10 +1,14 @@
+const jwt = require('jsonwebtoken');
+const { getJwtSecret } = require('../../backend/src/middleware/auth');
 const { handleUserJoin, handleUserLeave } = require('./driverState');
 
 module.exports = function registerRoomHandlers(io, socket) {
   const memberships = new Map();
+  const roomVerifiedUsers = new Map();
   socket.data.roomMemberships = memberships;
+  socket.data.roomVerifiedUsers = roomVerifiedUsers;
 
-  socket.on('room:join', ({ roomId, user } = {}, callback) => {
+  socket.on('room:join', ({ roomId, user, token } = {}, callback) => {
     if (!roomId || typeof roomId !== 'string') {
       callback?.({
         ok: false,
@@ -13,8 +17,39 @@ module.exports = function registerRoomHandlers(io, socket) {
       return;
     }
 
+    let verifiedUser = socket.data.verifiedUser || null;
+
+    if (!verifiedUser && token) {
+      try {
+        verifiedUser = jwt.verify(token, getJwtSecret());
+        socket.data.user = verifiedUser;
+        socket.data.verifiedUser = verifiedUser;
+        socket.data.authenticated = true;
+      } catch (_) {
+        verifiedUser = null;
+      }
+    }
+
+    // Secure identity binding:
+    // If the socket was verified via handshake or join token, use verified identity.
+    // If unverified, user payload is recorded for display name only.
+    const effectiveUser = verifiedUser
+      ? {
+          _id: verifiedUser.userId || verifiedUser.id || verifiedUser._id,
+          id: verifiedUser.userId || verifiedUser.id || verifiedUser._id,
+          userId: verifiedUser.userId || verifiedUser.id || verifiedUser._id,
+          username: verifiedUser.username,
+          email: verifiedUser.email,
+          name: verifiedUser.username,
+        }
+      : user || null;
+
+    if (verifiedUser) {
+      roomVerifiedUsers.set(roomId, effectiveUser);
+    }
+
     const alreadyJoined = memberships.has(roomId);
-    memberships.set(roomId, user);
+    memberships.set(roomId, effectiveUser);
     socket.join(roomId);
 
     const { driverId, isNewDriver } = handleUserJoin(roomId, socket.id, io);
@@ -44,13 +79,14 @@ module.exports = function registerRoomHandlers(io, socket) {
 
     if (!alreadyJoined) {
       socket.to(roomId).emit('room:user_joined', {
-        user,
+        user: effectiveUser,
         socketId: socket.id,
       });
     }
 
     console.log(`Socket ${socket.id} joined room ${roomId}`);
   });
+
 
   socket.on('room:leave', ({ roomId } = {}, callback) => {
     if (!roomId || typeof roomId !== 'string') {

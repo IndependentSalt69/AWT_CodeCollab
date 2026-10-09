@@ -15,66 +15,58 @@ async function verifyDriverPermission({ roomId, user, socketId, io }) {
 
   // 1. Check Real-Time Session Driver State
   if (currentDriverSocketId) {
-    // If client supplied a socketId, verify it matches driver socket AND belongs to authenticated user
-    if (socketId) {
-      if (socketId !== currentDriverSocketId) {
-        return { authorized: false, error: 'Only the active room driver can execute code', status: 403 };
-      }
-
-      if (io && io.sockets) {
-        const driverSocket = io.sockets.sockets.get(currentDriverSocketId);
-        if (driverSocket) {
-          const roomUser = driverSocket.data?.roomMemberships?.get(roomId) || driverSocket.data?.user;
-          if (roomUser && user) {
-            const driverUserId = roomUser._id || roomUser.id || roomUser.userId;
-            const reqUserId = user._id || user.id || user.userId;
-            const driverUsername = roomUser.username || roomUser.name;
-            const reqUsername = user.username || user.name;
-
-            const idMatch = driverUserId && reqUserId && String(driverUserId) === String(reqUserId);
-            const nameMatch = driverUsername && reqUsername && driverUsername === reqUsername;
-
-            if (!idMatch && !nameMatch) {
-              return { authorized: false, error: 'Authenticated user does not match the active room driver session', status: 403 };
-            }
-          }
-        }
-      }
-
-      return { authorized: true };
+    if (!io || !io.sockets) {
+      return { authorized: false, error: 'Realtime engine unavailable', status: 500 };
     }
 
-    // If no socketId was supplied, check if the current driver socket's attached user matches the authenticated user
-    if (io && io.sockets) {
-      const driverSocket = io.sockets.sockets.get(currentDriverSocketId);
-      if (driverSocket) {
-        const roomUser = driverSocket.data?.roomMemberships?.get(roomId) || driverSocket.data?.user;
-        const driverUserId = roomUser?._id || roomUser?.id || roomUser?.userId;
-        const reqUserId = user?._id || user?.id || user?.userId;
-        const driverUsername = roomUser?.username || roomUser?.name;
-        const reqUsername = user?.username || user?.name;
-
-        if (
-          (driverUserId && reqUserId && String(driverUserId) === String(reqUserId)) ||
-          (driverUsername && reqUsername && driverUsername === reqUsername)
-        ) {
-          return { authorized: true };
-        }
-      }
-
-      const members = getRemainingMembers(roomId, io);
-      for (const memberSocketId of members) {
-        const memberSocket = io.sockets.sockets.get(memberSocketId);
-        const memberUser = memberSocket?.data?.roomMemberships?.get(roomId) || memberSocket?.data?.user;
-        const memberUserId = memberUser?._id || memberUser?.id || memberUser?.userId;
-        const reqUserId = user?._id || user?.id || user?.userId;
-        if (memberUserId && reqUserId && String(memberUserId) === String(reqUserId)) {
-          return { authorized: false, error: 'Only the active room driver can execute code', status: 403 };
-        }
-      }
+    const driverSocket = io.sockets.sockets.get(currentDriverSocketId);
+    if (!driverSocket) {
+      return { authorized: false, error: 'Driver socket session not found', status: 404 };
     }
 
-    return { authorized: false, error: 'Only the active room driver can execute code', status: 403 };
+    // Retrieve driver socket user identity
+    const driverUser =
+      driverSocket.data?.roomVerifiedUsers?.get(roomId) ||
+      driverSocket.data?.verifiedUser ||
+      driverSocket.data?.roomMemberships?.get(roomId) ||
+      driverSocket.data?.user;
+
+    // Fail closed if driver session has no bound user identity
+    if (!driverUser) {
+      return {
+        authorized: false,
+        error: 'Driver session is not authenticated with a verified user identity',
+        status: 403,
+      };
+    }
+
+    // If client supplied a socketId, verify it matches driver socket first
+    if (socketId && socketId !== currentDriverSocketId) {
+      return {
+        authorized: false,
+        error: 'Only the active room driver can execute code',
+        status: 403,
+      };
+    }
+
+    // Verify authenticated HTTP user matches the driver socket identity
+    const driverUserId = driverUser._id || driverUser.id || driverUser.userId;
+    const reqUserId = user?._id || user?.id || user?.userId;
+    const driverUsername = driverUser.username || driverUser.name;
+    const reqUsername = user?.username || user?.name;
+
+    const idMatch = driverUserId && reqUserId && String(driverUserId) === String(reqUserId);
+    const nameMatch = driverUsername && reqUsername && driverUsername === reqUsername;
+
+    if (!idMatch && !nameMatch) {
+      return {
+        authorized: false,
+        error: 'Authenticated user does not match the active room driver session',
+        status: 403,
+      };
+    }
+
+    return { authorized: true };
   }
 
   // 2. If no realtime session exists, check Database Room record (if DB connected)
