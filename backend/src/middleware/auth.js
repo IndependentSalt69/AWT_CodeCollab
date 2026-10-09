@@ -1,6 +1,17 @@
 const jwt = require('jsonwebtoken');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret_key_12345';
+function getJwtSecret() {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('FATAL: JWT_SECRET environment variable must be defined in production');
+    }
+    return 'dev_secret_key_12345';
+  }
+  return secret;
+}
+
+const JWT_SECRET = getJwtSecret();
 
 /**
  * Middleware to verify JWT authentication token in Authorization header.
@@ -25,7 +36,7 @@ function authenticate(req, res, next) {
   }
 
   try {
-    const decoded = jwt.verify(token, JWT_SECRET);
+    const decoded = jwt.verify(token, getJwtSecret());
     req.user = decoded;
     next();
   } catch (err) {
@@ -43,14 +54,15 @@ function authenticate(req, res, next) {
 }
 
 /**
- * Helper to generate signed JWT for tests and user sessions.
+ * Helper to generate signed JWT for user sessions and tests.
  */
-function generateToken(payload, expiresIn = '1h') {
-  return jwt.sign(payload, JWT_SECRET, { expiresIn });
+function generateToken(payload, expiresIn = '24h') {
+  return jwt.sign(payload, getJwtSecret(), { expiresIn });
 }
 
 module.exports = {
   authenticate,
   generateToken,
+  getJwtSecret,
   JWT_SECRET,
 };
