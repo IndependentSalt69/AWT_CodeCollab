@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import {
   initClientSocket,
+  resetClientSocket,
 } from '../../realtime/client/socket';
 import {
   SOCKET_EVENTS,
@@ -9,6 +10,9 @@ import CodeEditor from './components/editor/CodeEditor';
 import Terminal from './components/terminal/Terminal';
 import { submitCodeExecution } from './services/executionService';
 import { ExecutionResult, ExecutionStatus } from './types/execution';
+import { useAuth } from './context/AuthContext';
+import LoginPage from './pages/Login/LoginPage';
+import SignupPage from './pages/Signup/SignupPage';
 
 type RoomMember = {
   socketId: string;
@@ -39,6 +43,16 @@ print(f"Sum of sequence: {sum(fib_10)}")
 `;
 
 export default function App() {
+  const {
+    user: authUser,
+    token: authToken,
+    isAuthenticated,
+    isLoading: authLoading,
+    logout,
+  } = useAuth();
+
+  const [authView, setAuthView] = useState<'login' | 'signup'>('login');
+
   const [backendStatus, setBackendStatus] = useState<string>('checking...');
   const [socketStatus, setSocketStatus] = useState<string>('disconnected');
   const [roomStatus, setRoomStatus] = useState<string>('not joined');
@@ -46,7 +60,6 @@ export default function App() {
   const [activityFeed, setActivityFeed] = useState<ActivityItem[]>([]);
   const [driverId, setDriverId] = useState<string | null>(null);
   const [myId, setMyId] = useState<string>('');
-  const [myName, setMyName] = useState<string>('');
   const [transferStatus, setTransferStatus] = useState<string>('');
 
   // Editor state
@@ -56,10 +69,6 @@ export default function App() {
   // Execution state
   const [isExecuting, setIsExecuting] = useState<boolean>(false);
   const [executionResult, setExecutionResult] = useState<ExecutionResult | null>(null);
-  const [jwtToken, setJwtToken] = useState<string>(() => {
-    return typeof window !== 'undefined' ? localStorage.getItem('token') || '' : '';
-  });
-  const [showAuthDrawer, setShowAuthDrawer] = useState<boolean>(false);
 
   const socketRef = useRef<any>(null);
   const isIncomingUpdateRef = useRef<boolean>(false);
@@ -124,17 +133,6 @@ export default function App() {
     }
   };
 
-  const handleSaveToken = (newToken: string) => {
-    setJwtToken(newToken);
-    if (typeof window !== 'undefined') {
-      if (newToken.trim()) {
-        localStorage.setItem('token', newToken.trim());
-      } else {
-        localStorage.removeItem('token');
-      }
-    }
-  };
-
   const handleRunCode = async () => {
     if (!isDriver) {
       alert('Only the active room Driver can execute code.');
@@ -163,7 +161,7 @@ export default function App() {
         code,
         socketId: myId,
       },
-      jwtToken
+      authToken
     );
 
     if (!response.ok) {
@@ -197,19 +195,30 @@ export default function App() {
     setIsExecuting(false);
   };
 
+  const handleLogout = () => {
+    resetClientSocket();
+    logout();
+  };
+
   useEffect(() => {
+    if (!isAuthenticated) return;
+
     fetch('http://localhost:5000/health')
       .then((res) => res.json())
       .then((data) => setBackendStatus(data.status || 'connected'))
       .catch(() => setBackendStatus('offline'));
 
-    const socket = initClientSocket('http://localhost:5000');
+    // Authenticated socket connection with JWT
+    const socket = initClientSocket('http://localhost:5000', {
+      auth: { token: authToken },
+    });
     socketRef.current = socket;
 
-    const generatedName = `User-${Math.random().toString(36).slice(2, 7)}`;
-    setMyName(generatedName);
-    const user = {
-      name: generatedName,
+    const userPayload = {
+      id: authUser?.id,
+      name: authUser?.username,
+      username: authUser?.username,
+      email: authUser?.email,
     };
 
     const handleConnect = () => {
@@ -221,7 +230,11 @@ export default function App() {
 
       socket.emit(
         SOCKET_EVENTS.ROOM.JOIN,
-        { roomId, user },
+        {
+          roomId,
+          user: userPayload,
+          token: authToken,
+        },
         (response: {
           ok: boolean;
           roomId?: string;
@@ -416,12 +429,12 @@ export default function App() {
       if (socket.connected) {
         socket.emit(SOCKET_EVENTS.ROOM.LEAVE, {
           roomId,
-          user,
+          user: userPayload,
         });
       }
       socket.disconnect();
     };
-  }, []);
+  }, [isAuthenticated, authToken]);
 
   const handleTransferDriver = (targetSocketId: string) => {
     if (!socketRef.current || !isDriver) return;
@@ -439,6 +452,52 @@ export default function App() {
     );
   };
 
+  // 1. Session Restoration Loading View
+  if (authLoading) {
+    return (
+      <div
+        id="auth-loading-spinner"
+        style={{
+          fontFamily: 'system-ui, -apple-system, sans-serif',
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          minHeight: '80vh',
+          color: '#64748b',
+        }}
+      >
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: '2rem', marginBottom: '10px' }}>⚡</div>
+          <div style={{ fontSize: '1rem', fontWeight: 600, color: '#334155' }}>Loading CodeCollab...</div>
+          <div style={{ fontSize: '0.85rem', color: '#94a3b8', marginTop: '4px' }}>Restoring authenticated session</div>
+        </div>
+      </div>
+    );
+  }
+
+  // 2. Unauthenticated View (Login / Signup)
+  if (!isAuthenticated) {
+    return (
+      <div style={{ fontFamily: 'system-ui, -apple-system, sans-serif', background: '#f8fafc', minHeight: '100vh', padding: '2rem 1rem' }}>
+        <header style={{ textAlign: 'center', marginBottom: '2rem' }}>
+          <h1 style={{ fontSize: '2rem', fontWeight: 800, margin: 0, color: '#0f172a' }}>CodeCollab</h1>
+          <p style={{ margin: '6px 0 0', fontSize: '0.95rem', color: '#64748b' }}>
+            Real-time collaborative code editor with sandboxed execution
+          </p>
+        </header>
+
+        <main>
+          {authView === 'login' ? (
+            <LoginPage onSwitchToSignup={() => setAuthView('signup')} />
+          ) : (
+            <SignupPage onSwitchToLogin={() => setAuthView('login')} />
+          )}
+        </main>
+      </div>
+    );
+  }
+
+  // 3. Authenticated Collaborative Coding Interface
   return (
     <div style={{ fontFamily: 'system-ui, -apple-system, sans-serif', padding: '1.5rem', maxWidth: '1000px', margin: '0 auto', color: '#1e293b' }}>
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
@@ -449,75 +508,47 @@ export default function App() {
           </p>
         </div>
 
-        <button
-          onClick={() => setShowAuthDrawer(!showAuthDrawer)}
-          style={{
-            padding: '6px 12px',
-            fontSize: '0.8rem',
-            backgroundColor: jwtToken ? '#f0fdf4' : '#f8fafc',
-            color: jwtToken ? '#166534' : '#475569',
-            border: `1px solid ${jwtToken ? '#bbf7d0' : '#cbd5e1'}`,
-            borderRadius: '6px',
-            cursor: 'pointer',
-            fontWeight: 500,
-          }}
-        >
-          {jwtToken ? '🔑 JWT Token Configured' : '🔒 Set JWT Auth Token'}
-        </button>
-      </header>
+        {/* User Identity & Logout Action */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <div
+            id="user-profile-badge"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '6px 12px',
+              backgroundColor: '#f1f5f9',
+              border: '1px solid #cbd5e1',
+              borderRadius: '6px',
+              fontSize: '0.85rem',
+              color: '#334155',
+              fontWeight: 500,
+            }}
+          >
+            <span>👤</span>
+            <strong>{authUser?.username}</strong>
+            <span style={{ color: '#64748b', fontSize: '0.75rem' }}>({authUser?.email})</span>
+          </div>
 
-      {/* Auth Token Drawer */}
-      {showAuthDrawer && (
-        <div
-          style={{
-            backgroundColor: '#f8fafc',
-            border: '1px solid #e2e8f0',
-            borderRadius: '8px',
-            padding: '12px 16px',
-            marginBottom: '1rem',
-            fontSize: '0.85rem',
-          }}
-        >
-          <div style={{ fontWeight: 600, marginBottom: '6px', color: '#334155' }}>
-            JWT Authentication Token (POST /api/execute requires Bearer token)
-          </div>
-          <div style={{ display: 'flex', gap: '8px' }}>
-            <input
-              type="text"
-              placeholder="Paste Bearer JWT token here..."
-              value={jwtToken}
-              onChange={(e) => handleSaveToken(e.target.value)}
-              style={{
-                flex: 1,
-                padding: '6px 10px',
-                fontSize: '0.8rem',
-                border: '1px solid #cbd5e1',
-                borderRadius: '4px',
-                fontFamily: 'monospace',
-              }}
-            />
-            {jwtToken && (
-              <button
-                onClick={() => handleSaveToken('')}
-                style={{
-                  padding: '6px 10px',
-                  fontSize: '0.8rem',
-                  backgroundColor: '#fee2e2',
-                  color: '#991b1b',
-                  border: '1px solid #fca5a5',
-                  borderRadius: '4px',
-                  cursor: 'pointer',
-                }}
-              >
-                Clear
-              </button>
-            )}
-          </div>
-          <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '6px' }}>
-            Token is stored in localStorage. If no token is provided, requests return 401 Unauthorized.
-          </div>
+          <button
+            id="logout-btn"
+            onClick={handleLogout}
+            style={{
+              padding: '6px 12px',
+              fontSize: '0.8rem',
+              backgroundColor: '#fee2e2',
+              color: '#991b1b',
+              border: '1px solid #fecaca',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              fontWeight: 600,
+              transition: 'background-color 0.15s ease',
+            }}
+          >
+            Sign Out
+          </button>
         </div>
-      )}
+      </header>
 
       {/* Status Banner */}
       <div style={{ background: '#f8fafc', padding: '1rem 1.25rem', borderRadius: '8px', border: '1px solid #e2e8f0', marginBottom: '1.25rem' }}>
@@ -672,7 +703,7 @@ export default function App() {
               }}
             >
               <span>
-                <strong>{myName || 'You'} (You)</strong>{' '}
+                <strong>{authUser?.username || 'You'} (You)</strong>{' '}
                 <span>{isDriver ? '👑' : '👀'}</span>
               </span>
               <span style={{ fontSize: '0.8rem', fontWeight: 600, color: isDriver ? '#059669' : '#64748b' }}>
