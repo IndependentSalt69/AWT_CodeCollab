@@ -1,15 +1,15 @@
 # Execution Engine & Runners
 
-This directory houses the containerized code execution subsystem, Redis-backed execution queue, persistence, and realtime event integration for CodeCollab.
+This directory houses the containerized code execution subsystem, Redis-backed execution queue, persistence, realtime event integration, and frontend terminal interface for CodeCollab.
 
-## Architecture (M0.5d)
+## Architecture (M0.5e)
 
 ```text
-HTTP POST /api/execute (JWT Authenticated Driver)
-      ↓
-Controller & Service Validation (roomId, language, code, driver authorization via driverState.js)
-      ↓
-ExecutionRun Created (database/models/ExecutionRun.js -> status: 'queued')
+User Interface (Frontend React + Monaco Editor)
+      ↓ (Driver clicks "Run Code")
+Frontend Execution Service (services/executionService.ts -> POST /api/execute)
+      ↓ (JWT Bearer Token + Driver Authorization via driverState.js)
+ExecutionRun Document Created (database/models/ExecutionRun.js -> status: 'queued')
       ↓
 Realtime Event Broadcast (io.to(roomId).emit('execution:started', { runId, status: 'queued', ... }))
       ↓
@@ -35,11 +35,11 @@ Ephemeral Container Cleanup (container.remove({ force: true }))
       ↓
 Job Result Propagation (job.waitUntilFinished)
       ↓
-ExecutionRun Updated (status: 'completed' | 'failed' | 'timeout', stdout, stderr, exitCode, executionTimeMs)
+ExecutionRun Document Updated (status: 'completed' | 'failed' | 'timeout', stdout, stderr, exitCode, executionTimeMs)
       ↓
 Realtime Event Broadcast (io.to(roomId).emit('execution:completed' | 'execution:failed', { runId, ... }))
       ↓
-HTTP 200 OK Response ({ status: 'success', data: { runId, status, stdout, stderr, ... } })
+Frontend Terminal Output Component (components/terminal/Terminal.tsx -> renders live status, stdout, stderr, duration, exit code)
 ```
 
 ---
@@ -70,7 +70,25 @@ HTTP 200 OK Response ({ status: 'success', data: { runId, status, stdout, stderr
 
 ---
 
-## 3. Redis + BullMQ Queue & Worker Architecture (M0.5c)
+## 3. Frontend Terminal & Run Code Action (M0.5e)
+
+- **Terminal Component (`frontend/src/components/terminal/Terminal.tsx`):**
+  - Live status badge: `Ready`, `Queued`, `Running...`, `Completed`, `Failed`, `Timeout`.
+  - Distinguishable `stdout` (monospace white) and `stderr` (monospace red/rose).
+  - Execution duration metric (`executionTimeMs`) and exit code badge.
+  - Clear button and graceful handling of empty output.
+- **Run Code Control (`frontend/src/App.tsx`):**
+  - Active Driver can trigger Python execution in isolated container.
+  - Disabled for Viewers with informative tooltip and badge.
+  - Prevents accidental duplicate submissions while execution is in progress.
+  - Surfaces backend validation and authentication errors clearly in the terminal.
+- **Realtime Synchronization:**
+  - Room members (Driver and Viewers) receive synchronized `execution:started`, `execution:completed`, and `execution:failed` updates.
+  - Strict room isolation ensures other rooms cannot tamper with the active terminal.
+
+---
+
+## 4. Redis + BullMQ Queue & Worker Architecture (M0.5c)
 
 - **Job Queue (`EXECUTION_QUEUE_NAME = 'codecollab-execution-queue'`):**
   - Connects to Redis using `REDIS_URL` (default: `redis://localhost:6379`).
@@ -89,7 +107,7 @@ HTTP 200 OK Response ({ status: 'success', data: { runId, status, stdout, stderr
 
 ---
 
-## 4. Docker Container Sandboxing & Security (M0.5b)
+## 5. Docker Container Sandboxing & Security (M0.5b)
 
 Each code run is executed inside an ephemeral container configured with the following isolation parameters:
 - **Memory Limit:** 256 MB (`Memory: 268435456`, `MemorySwap: 268435456`)
@@ -102,7 +120,7 @@ Each code run is executed inside an ephemeral container configured with the foll
 
 ---
 
-## 5. Python 3.11 Dynamic Runner (`execution/runners/python/`)
+## 6. Python 3.11 Dynamic Runner (`execution/runners/python/`)
 
 The Python 3.11 runner executes dynamic user-submitted code in an unbuffered environment under an unprivileged `sandbox` user.
 
@@ -125,22 +143,24 @@ docker build -t codecollab-runner-python:latest execution/runners/python
 
 ---
 
-## 6. Other Language Runners (`execution/runners/`)
+## 7. Other Language Runners (`execution/runners/`)
 
-- `java/` — OpenJDK 17 runner *(placeholder skeleton; orchestration scheduled for future milestone)*.
-- `cpp/` — GCC 13 runner *(placeholder skeleton; orchestration scheduled for future milestone)*.
+- `java/` — OpenJDK 17 runner *(placeholder skeleton; editor preview only)*.
+- `cpp/` — GCC 13 runner *(placeholder skeleton; editor preview only)*.
 
 ---
 
-## 7. Verification Status (M0.5d)
+## 8. Verification Status (M0.5e)
 
+- **Frontend Terminal Integration Tests:** `testing/frontend/execution_frontend.test.js` (17/17 passing).
 - **Execution API Integration Tests:** `testing/backend/execute.test.js` (12/12 passing).
 - **Redis + BullMQ Queue Tests:** `testing/execution/queue.test.js` (11/11 passing).
 - **Dockerode Orchestrator Tests:** `testing/execution/execution.test.js` (13/13 passing).
 - **Python Runner Unit Tests:** `testing/execution/python_runner.test.js` (12/12 passing).
 - **Realtime Collaboration Tests:** `testing/realtime/` (12/12 passing).
 - **Backend Auth & Room Tests:** `testing/backend/` (6/6 passing).
-- **Full Test Suite:** 66/66 tests passing across all backend, realtime, and execution modules.
+- **Full Test Suite:** 83/83 tests passing across all 11 suites.
+- **Frontend TypeScript & Production Build:** `tsc && vite build` succeeded (0 errors).
 
 ### Local Verification Steps
 1. Start Redis:
@@ -155,18 +175,23 @@ docker build -t codecollab-runner-python:latest execution/runners/python
    ```bash
    npx jest testing/backend/
    ```
-4. Run Full Test Suite:
+4. Run Frontend Tests:
+   ```bash
+   npx jest testing/frontend/
+   ```
+5. Run Full Test Suite:
    ```bash
    npx jest --forceExit
+   ```
+6. Build Frontend:
+   ```bash
+   npm run build --workspace frontend
    ```
 
 ---
 
-## 8. Known Limitations (M0.5d)
+## 9. Known Limitations (M0.5e)
 
-- **C++ and Java Runners:** Remain static placeholders. Invoking non-Python languages in `executeCode` or queue throws an unsupported language error.
-- **Frontend Terminal UI:** Output display and "Run Code" interactive components are scheduled for M0.5e.
-- **Multi-File Execution:** Execution is currently scoped to single-file code payloads.
-
-
-
+- **C++ and Java Runners:** Remain editor preview modes only. Container execution is active for Python 3.11.
+- **Frontend Authentication Flow:** Full multi-page login/signup and JWT session store are scheduled for a dedicated milestone. The Terminal UI cleanly handles 401 errors and supports developer token entry via `localStorage.getItem('token')`.
+- **Single-File Execution:** Code payloads currently execute as single-file dynamic scripts.

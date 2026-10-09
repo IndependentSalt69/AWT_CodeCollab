@@ -15,12 +15,36 @@ async function verifyDriverPermission({ roomId, user, socketId, io }) {
 
   // 1. Check Real-Time Session Driver State
   if (currentDriverSocketId) {
-    // Direct socket ID match
-    if (socketId && socketId === currentDriverSocketId) {
+    // If client supplied a socketId, verify it matches driver socket AND belongs to authenticated user
+    if (socketId) {
+      if (socketId !== currentDriverSocketId) {
+        return { authorized: false, error: 'Only the active room driver can execute code', status: 403 };
+      }
+
+      if (io && io.sockets) {
+        const driverSocket = io.sockets.sockets.get(currentDriverSocketId);
+        if (driverSocket) {
+          const roomUser = driverSocket.data?.roomMemberships?.get(roomId) || driverSocket.data?.user;
+          if (roomUser && user) {
+            const driverUserId = roomUser._id || roomUser.id || roomUser.userId;
+            const reqUserId = user._id || user.id || user.userId;
+            const driverUsername = roomUser.username || roomUser.name;
+            const reqUsername = user.username || user.name;
+
+            const idMatch = driverUserId && reqUserId && String(driverUserId) === String(reqUserId);
+            const nameMatch = driverUsername && reqUsername && driverUsername === reqUsername;
+
+            if (!idMatch && !nameMatch) {
+              return { authorized: false, error: 'Authenticated user does not match the active room driver session', status: 403 };
+            }
+          }
+        }
+      }
+
       return { authorized: true };
     }
 
-    // Check if the current driver socket's attached user matches the authenticated user
+    // If no socketId was supplied, check if the current driver socket's attached user matches the authenticated user
     if (io && io.sockets) {
       const driverSocket = io.sockets.sockets.get(currentDriverSocketId);
       if (driverSocket) {
@@ -35,15 +59,6 @@ async function verifyDriverPermission({ roomId, user, socketId, io }) {
           (driverUsername && reqUsername && driverUsername === reqUsername)
         ) {
           return { authorized: true };
-        }
-      }
-
-      // Check if requester is explicitly a viewer in the room
-      if (socketId) {
-        const reqSocket = io.sockets.sockets.get(socketId);
-        const inRoom = reqSocket && (io.sockets.adapter?.rooms?.get(roomId)?.has(socketId) || reqSocket.rooms?.has(roomId));
-        if (inRoom) {
-          return { authorized: false, error: 'Only the active room driver can execute code', status: 403 };
         }
       }
 

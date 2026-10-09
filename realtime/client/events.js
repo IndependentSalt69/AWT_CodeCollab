@@ -12,6 +12,11 @@ export const SOCKET_EVENTS = {
     DRIVER_CHANGE: 'editor:driver_change',
     DRIVER_UPDATED: 'editor:driver_updated',
   },
+  EXECUTION: {
+    STARTED: 'execution:started',
+    COMPLETED: 'execution:completed',
+    FAILED: 'execution:failed',
+  },
   PRESENCE: {
     PING: 'presence:ping',
     HEARTBEAT: 'presence:heartbeat',
