@@ -3,6 +3,10 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
+    "test": "jest --runInBand",
+    "test:backend": "jest --runInBand testing/backend",
+    "test:execution": "jest --runInBand testing/execution",
+    "test:frontend": "jest --runInBand testing/frontend",
     "test:realtime": "jest --runInBand testing/realtime",
     "build": "npm run build --workspace frontend"
   },
