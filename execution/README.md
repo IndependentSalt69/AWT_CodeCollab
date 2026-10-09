@@ -1,11 +1,17 @@
 # Execution Engine & Runners
 
-This directory houses the containerized code execution subsystem and Redis-backed execution queue for CodeCollab.
+This directory houses the containerized code execution subsystem, Redis-backed execution queue, persistence, and realtime event integration for CodeCollab.
 
-## Architecture (M0.5c)
+## Architecture (M0.5d)
 
 ```text
-Code Submission
+HTTP POST /api/execute (JWT Authenticated Driver)
+      ↓
+Controller & Service Validation (roomId, language, code, driver authorization via driverState.js)
+      ↓
+ExecutionRun Created (database/models/ExecutionRun.js -> status: 'queued')
+      ↓
+Realtime Event Broadcast (io.to(roomId).emit('execution:started', { runId, status: 'queued', ... }))
       ↓
 BullMQ Execution Queue (queue.js)  <--->  Redis (REDIS_URL / localhost:6379)
       ↓
@@ -27,7 +33,13 @@ Result Parser (resultParser.js -> stdout, stderr, exitCode, executionTimeMs, sta
       ↓
 Ephemeral Container Cleanup (container.remove({ force: true }))
       ↓
-Job Result Propagation (job.waitUntilFinished / event stream)
+Job Result Propagation (job.waitUntilFinished)
+      ↓
+ExecutionRun Updated (status: 'completed' | 'failed' | 'timeout', stdout, stderr, exitCode, executionTimeMs)
+      ↓
+Realtime Event Broadcast (io.to(roomId).emit('execution:completed' | 'execution:failed', { runId, ... }))
+      ↓
+HTTP 200 OK Response ({ status: 'success', data: { runId, status, stdout, stderr, ... } })
 ```
 
 ---
@@ -42,7 +54,23 @@ Job Result Propagation (job.waitUntilFinished / event stream)
 
 ---
 
-## 2. Redis + BullMQ Queue & Worker Architecture (M0.5c)
+## 2. API & Realtime Integration (M0.5d)
+
+- **HTTP Route (`POST /api/execute`):**
+  - Authenticated via JWT bearer token (`backend/src/middleware/auth.js`).
+  - Strict driver authorization: verified using `realtime/server/driverState.js`. Rejects non-drivers with `403 Forbidden` and non-existent rooms with `404 Not Found`.
+- **Database Persistence (`database/models/ExecutionRun.js`):**
+  - Persists full execution lifecycle: `queued` → `completed` | `failed` | `timeout`.
+  - Captures `roomId`, `triggeredBy`, `language`, `code`, `stdout`, `stderr`, `exitCode`, `executionTimeMs`, and `status`.
+- **Realtime Broadcasts (`io.to(roomId)`):**
+  - `execution:started` — emitted when code execution is validated and queued.
+  - `execution:completed` — emitted when code runs successfully with exit code 0.
+  - `execution:failed` — emitted when code fails, returns a non-zero exit code, or times out.
+  - Strictly isolated to the specific room members.
+
+---
+
+## 3. Redis + BullMQ Queue & Worker Architecture (M0.5c)
 
 - **Job Queue (`EXECUTION_QUEUE_NAME = 'codecollab-execution-queue'`):**
   - Connects to Redis using `REDIS_URL` (default: `redis://localhost:6379`).
@@ -61,7 +89,7 @@ Job Result Propagation (job.waitUntilFinished / event stream)
 
 ---
 
-## 3. Docker Container Sandboxing & Security (M0.5b)
+## 4. Docker Container Sandboxing & Security (M0.5b)
 
 Each code run is executed inside an ephemeral container configured with the following isolation parameters:
 - **Memory Limit:** 256 MB (`Memory: 268435456`, `MemorySwap: 268435456`)
@@ -74,7 +102,7 @@ Each code run is executed inside an ephemeral container configured with the foll
 
 ---
 
-## 4. Python 3.11 Dynamic Runner (`execution/runners/python/`)
+## 5. Python 3.11 Dynamic Runner (`execution/runners/python/`)
 
 The Python 3.11 runner executes dynamic user-submitted code in an unbuffered environment under an unprivileged `sandbox` user.
 
@@ -97,20 +125,22 @@ docker build -t codecollab-runner-python:latest execution/runners/python
 
 ---
 
-## 5. Other Language Runners (`execution/runners/`)
+## 6. Other Language Runners (`execution/runners/`)
 
 - `java/` — OpenJDK 17 runner *(placeholder skeleton; orchestration scheduled for future milestone)*.
 - `cpp/` — GCC 13 runner *(placeholder skeleton; orchestration scheduled for future milestone)*.
 
 ---
 
-## 6. Verification Status (M0.5c)
+## 7. Verification Status (M0.5d)
 
-- **Redis + BullMQ Queue:** Verified with Redis 7 container on port 6379.
-- **Queue Test Suite:** `testing/execution/queue.test.js` (11/11 passing).
+- **Execution API Integration Tests:** `testing/backend/execute.test.js` (12/12 passing).
+- **Redis + BullMQ Queue Tests:** `testing/execution/queue.test.js` (11/11 passing).
 - **Dockerode Orchestrator Tests:** `testing/execution/execution.test.js` (13/13 passing).
 - **Python Runner Unit Tests:** `testing/execution/python_runner.test.js` (12/12 passing).
-- **Full Test Suite:** 54/54 tests passing across all backend, realtime, and execution modules.
+- **Realtime Collaboration Tests:** `testing/realtime/` (12/12 passing).
+- **Backend Auth & Room Tests:** `testing/backend/` (6/6 passing).
+- **Full Test Suite:** 66/66 tests passing across all backend, realtime, and execution modules.
 
 ### Local Verification Steps
 1. Start Redis:
@@ -121,17 +151,22 @@ docker build -t codecollab-runner-python:latest execution/runners/python
    ```bash
    npx jest testing/execution/
    ```
-3. Run Full Test Suite:
+3. Run Backend API Tests:
    ```bash
-   npx jest
+   npx jest testing/backend/
+   ```
+4. Run Full Test Suite:
+   ```bash
+   npx jest --forceExit
    ```
 
 ---
 
-## 7. Known Limitations (M0.5c)
+## 8. Known Limitations (M0.5d)
 
 - **C++ and Java Runners:** Remain static placeholders. Invoking non-Python languages in `executeCode` or queue throws an unsupported language error.
-- **Backend API & Socket Integration:** REST API endpoint (`POST /api/execute`) and Socket.IO execution events are scheduled for M0.5d.
-- **Frontend Terminal UI:** Output display component is scheduled for M0.5e.
+- **Frontend Terminal UI:** Output display and "Run Code" interactive components are scheduled for M0.5e.
+- **Multi-File Execution:** Execution is currently scoped to single-file code payloads.
+
 
 

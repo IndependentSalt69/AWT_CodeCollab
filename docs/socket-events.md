@@ -5,5 +5,7 @@ Please refer to the detailed protocol specification in [`realtime/protocol/socke
 ## Overview
 - **Rooms**: Handled under `room:*` namespace
 - **Editor Sync**: Broadcasts code updates and active driver control under `editor:*`
+- **Execution**: Broadcasts code execution lifecycle and outputs under `execution:*`
 - **Presence**: Real-time member list and heartbeat under `presence:*`
 - **Chat & Typing**: Messaging and live typing indicators under `chat:*` and `typing:*`
+

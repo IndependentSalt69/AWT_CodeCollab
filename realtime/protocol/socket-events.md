@@ -45,7 +45,55 @@ This document details the Socket.IO event contract between the CodeCollab client
 5. **Driver Disconnects/Leaves**: Server automatically promotes one of the remaining room members to **Driver** and broadcasts `editor:driver_updated`.
 6. **Last User Leaves**: When the room becomes empty, all driver state for the room is completely cleared.
 
-## 3. Presence & Heartbeat Events
+## 3. Execution Lifecycle Events (`execution:*`)
+- **`execution:started`** (Server → Room Broadcast)
+  - Payload:
+    ```typescript
+    {
+      runId: string;
+      roomId: string;
+      status: 'queued' | 'running';
+      language: string;
+      triggeredBy: string;
+      createdAt: string;
+    }
+    ```
+  - Broadcast to all room members immediately when a code execution job is enqueued by the Driver.
+- **`execution:completed`** (Server → Room Broadcast)
+  - Payload:
+    ```typescript
+    {
+      runId: string;
+      roomId: string;
+      status: 'completed';
+      stdout: string;
+      stderr: string;
+      exitCode: 0;
+      executionTimeMs: number;
+      language: string;
+      triggeredBy: string;
+    }
+    ```
+  - Broadcast to all room members when container execution finishes successfully with exit code 0.
+- **`execution:failed`** (Server → Room Broadcast)
+  - Payload:
+    ```typescript
+    {
+      runId: string;
+      roomId: string;
+      status: 'failed' | 'timeout';
+      stdout: string;
+      stderr: string;
+      exitCode: number;
+      executionTimeMs: number;
+      language: string;
+      triggeredBy: string;
+      error?: string;
+    }
+    ```
+  - Broadcast to all room members when user code produces runtime exceptions, syntax errors, or container timeouts.
+
+## 4. Presence & Heartbeat Events
 - **`presence:ping`** (Client → Server)
   - Payload: `{ roomId: string, user: object }`
 - **`presence:heartbeat`** (Server → Room Broadcast)
@@ -55,13 +103,13 @@ This document details the Socket.IO event contract between the CodeCollab client
 - **`presence:status_changed`** (Server → Room Broadcast)
   - Payload: `{ user: object, status: string }`
 
-## 4. Chat Events
+## 5. Chat Events
 - **`chat:message_send`** (Client → Server)
   - Payload: `{ roomId: string, message: { text: string, sender: object } }`
 - **`chat:message_received`** (Server → Room Broadcast)
   - Payload: `{ text: string, sender: object, timestamp: string, socketId: string }`
 
-## 5. Typing Indicator Events
+## 6. Typing Indicator Events
 - **`typing:start`** (Client → Server)
   - Payload: `{ roomId: string, user: object }`
 - **`typing:user_typing`** (Server → Room Broadcast)
@@ -70,3 +118,4 @@ This document details the Socket.IO event contract between the CodeCollab client
   - Payload: `{ roomId: string, user: object }`
 - **`typing:user_stopped`** (Server → Room Broadcast)
   - Payload: `{ user: object }`
+
