@@ -12,6 +12,7 @@ const { initRealtimeServer } = require('../../realtime/server');
 const executionQueue = require('../../execution/engine/queue');
 const executeRouter = require('./routes/execute');
 const authRouter = require('./routes/auth');
+const roomsRouter = require('./routes/rooms');
 
 const app = express();
 const httpServer = http.createServer(app);
@@ -47,6 +48,7 @@ app.get('/health', (req, res) => {
 });
 
 app.use('/api/auth', authRouter);
+app.use('/api/rooms', roomsRouter);
 app.use('/api/execute', executeRouter);
 
 
