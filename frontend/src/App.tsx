@@ -10,9 +10,11 @@ import CodeEditor from './components/editor/CodeEditor';
 import Terminal from './components/terminal/Terminal';
 import { submitCodeExecution } from './services/executionService';
 import { ExecutionResult, ExecutionStatus } from './types/execution';
+import { Room } from './types/room';
 import { useAuth } from './context/AuthContext';
 import LoginPage from './pages/Login/LoginPage';
 import SignupPage from './pages/Signup/SignupPage';
+import DashboardPage from './pages/Dashboard/DashboardPage';
 
 type RoomMember = {
   socketId: string;
@@ -52,6 +54,7 @@ export default function App() {
   } = useAuth();
 
   const [authView, setAuthView] = useState<'login' | 'signup'>('login');
+  const [activeRoom, setActiveRoom] = useState<Room | null>(null);
 
   const [backendStatus, setBackendStatus] = useState<string>('checking...');
   const [socketStatus, setSocketStatus] = useState<string>('disconnected');
@@ -70,11 +73,13 @@ export default function App() {
   const [isExecuting, setIsExecuting] = useState<boolean>(false);
   const [executionResult, setExecutionResult] = useState<ExecutionResult | null>(null);
 
+  const [copiedRoomCode, setCopiedRoomCode] = useState<boolean>(false);
+
   const socketRef = useRef<any>(null);
   const isIncomingUpdateRef = useRef<boolean>(false);
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const roomId = 'test-room';
 
+  const roomId = activeRoom ? activeRoom.roomId : '';
   const isDriver = Boolean(myId && driverId === myId);
   const isLanguageExecutable = language === 'python';
 
@@ -88,7 +93,7 @@ export default function App() {
   };
 
   const emitEditorChange = (newCode: string, newLang: string) => {
-    if (!socketRef.current || !socketRef.current.connected) return;
+    if (!socketRef.current || !socketRef.current.connected || !roomId) return;
     socketRef.current.emit(
       SOCKET_EVENTS.EDITOR.CHANGE,
       {
@@ -136,6 +141,11 @@ export default function App() {
   const handleRunCode = async () => {
     if (!isDriver) {
       alert('Only the active room Driver can execute code.');
+      return;
+    }
+
+    if (!roomId) {
+      alert('No active room selected.');
       return;
     }
 
@@ -195,13 +205,47 @@ export default function App() {
     setIsExecuting(false);
   };
 
-  const handleLogout = () => {
+  const handleLeaveRoom = () => {
+    if (socketRef.current && socketRef.current.connected && roomId) {
+      socketRef.current.emit(SOCKET_EVENTS.ROOM.LEAVE, {
+        roomId,
+        user: {
+          id: authUser?.id,
+          name: authUser?.username,
+          username: authUser?.username,
+        },
+      });
+    }
     resetClientSocket();
+    setActiveRoom(null);
+    setRoomMembers([]);
+    setActivityFeed([]);
+    setDriverId(null);
+    setExecutionResult(null);
+    setRoomStatus('not joined');
+    setSocketStatus('disconnected');
+  };
+
+  const handleLogout = () => {
+    handleLeaveRoom();
     logout();
   };
 
+  // Synchronize language and starter code when room changes
   useEffect(() => {
-    if (!isAuthenticated) return;
+    if (activeRoom) {
+      if (activeRoom.language) {
+        setLanguage(activeRoom.language);
+      }
+      if (activeRoom.currentCode) {
+        setCode(activeRoom.currentCode);
+      }
+    }
+  }, [activeRoom]);
+
+  // Connect and manage Socket.IO session for active room
+  useEffect(() => {
+    if (!isAuthenticated || !activeRoom) return;
 
     fetch('http://localhost:5000/health')
       .then((res) => res.json())
@@ -434,10 +478,10 @@ export default function App() {
       }
       socket.disconnect();
     };
-  }, [isAuthenticated, authToken]);
+  }, [isAuthenticated, authToken, activeRoom]);
 
   const handleTransferDriver = (targetSocketId: string) => {
-    if (!socketRef.current || !isDriver) return;
+    if (!socketRef.current || !isDriver || !roomId) return;
     setTransferStatus('Transferring...');
     socketRef.current.emit(
       SOCKET_EVENTS.EDITOR.DRIVER_CHANGE,
@@ -450,6 +494,14 @@ export default function App() {
         }
       }
     );
+  };
+
+  const handleCopyActiveRoomCode = () => {
+    if (activeRoom) {
+      navigator.clipboard?.writeText(activeRoom.roomId);
+      setCopiedRoomCode(true);
+      setTimeout(() => setCopiedRoomCode(false), 2000);
+    }
   };
 
   // 1. Session Restoration Loading View
@@ -497,15 +549,125 @@ export default function App() {
     );
   }
 
-  // 3. Authenticated Collaborative Coding Interface
+  // 3. Authenticated Dashboard (when no room is selected)
+  if (!activeRoom) {
+    return (
+      <div style={{ fontFamily: 'system-ui, -apple-system, sans-serif', padding: '1.5rem', maxWidth: '1000px', margin: '0 auto', color: '#1e293b' }}>
+        <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+          <div>
+            <h1 style={{ fontSize: '1.6rem', fontWeight: 700, margin: 0, color: '#0f172a' }}>CodeCollab</h1>
+            <p style={{ margin: '4px 0 0', fontSize: '0.875rem', color: '#64748b' }}>
+              Real-time collaborative code editor with sandboxed execution
+            </p>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <div
+              id="user-profile-badge"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '6px 12px',
+                backgroundColor: '#f1f5f9',
+                border: '1px solid #cbd5e1',
+                borderRadius: '6px',
+                fontSize: '0.85rem',
+                color: '#334155',
+                fontWeight: 500,
+              }}
+            >
+              <span>👤</span>
+              <strong>{authUser?.username}</strong>
+              <span style={{ color: '#64748b', fontSize: '0.75rem' }}>({authUser?.email})</span>
+            </div>
+
+            <button
+              id="logout-btn"
+              onClick={handleLogout}
+              style={{
+                padding: '6px 12px',
+                fontSize: '0.8rem',
+                backgroundColor: '#fee2e2',
+                color: '#991b1b',
+                border: '1px solid #fecaca',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                fontWeight: 600,
+                transition: 'background-color 0.15s ease',
+              }}
+            >
+              Sign Out
+            </button>
+          </div>
+        </header>
+
+        <DashboardPage onSelectRoom={(room) => setActiveRoom(room)} />
+      </div>
+    );
+  }
+
+  // 4. Authenticated Collaborative Coding Room View
   return (
     <div style={{ fontFamily: 'system-ui, -apple-system, sans-serif', padding: '1.5rem', maxWidth: '1000px', margin: '0 auto', color: '#1e293b' }}>
-      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-        <div>
-          <h1 style={{ fontSize: '1.6rem', fontWeight: 700, margin: 0, color: '#0f172a' }}>CodeCollab</h1>
-          <p style={{ margin: '4px 0 0', fontSize: '0.875rem', color: '#64748b' }}>
-            Real-time collaborative code editor with sandboxed execution
-          </p>
+      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '10px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <button
+            id="back-to-dashboard-btn"
+            onClick={handleLeaveRoom}
+            style={{
+              padding: '6px 12px',
+              fontSize: '0.8rem',
+              backgroundColor: '#f1f5f9',
+              color: '#334155',
+              border: '1px solid #cbd5e1',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              fontWeight: 600,
+            }}
+          >
+            ← Dashboard
+          </button>
+
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <h1 style={{ fontSize: '1.4rem', fontWeight: 700, margin: 0, color: '#0f172a' }}>{activeRoom.name}</h1>
+              <span
+                style={{
+                  fontSize: '0.75rem',
+                  padding: '2px 8px',
+                  borderRadius: '4px',
+                  background: '#f1f5f9',
+                  color: '#475569',
+                  fontFamily: 'monospace',
+                  border: '1px solid #e2e8f0',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                }}
+              >
+                Code: {activeRoom.roomId}
+                <button
+                  onClick={handleCopyActiveRoomCode}
+                  title="Copy room code"
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    padding: 0,
+                    cursor: 'pointer',
+                    fontSize: '0.75rem',
+                    color: copiedRoomCode ? '#16a34a' : '#64748b',
+                    fontWeight: 600,
+                  }}
+                >
+                  {copiedRoomCode ? '✓' : '📋'}
+                </button>
+              </span>
+            </div>
+            <p style={{ margin: '2px 0 0', fontSize: '0.8rem', color: '#64748b' }}>
+              Real-time collaboration session
+            </p>
+          </div>
         </div>
 
         {/* User Identity & Logout Action */}
