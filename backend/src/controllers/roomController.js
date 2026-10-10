@@ -70,13 +70,15 @@ async function getRoomController(req, res) {
 /**
  * Controller for POST /api/rooms/:roomId/join (and POST /api/rooms/join)
  * Joins an existing room using its stable identifier or join code. Idempotent.
+ * If the room is private, requires valid inviteCode in req.body.
  */
 async function joinRoomController(req, res) {
   try {
     const userId = req.user?.userId || req.user?.id || req.user?._id;
     const targetRoomId = req.params.roomId || req.body?.roomId || req.body?.joinCode;
+    const inviteCode = req.body?.inviteCode || req.body?.code;
 
-    const room = await roomService.joinRoom(targetRoomId, userId);
+    const room = await roomService.joinRoom(targetRoomId, userId, { inviteCode });
     return res.status(200).json({
       ok: true,
       room,
@@ -90,9 +92,57 @@ async function joinRoomController(req, res) {
   }
 }
 
+/**
+ * Controller for GET /api/rooms/:roomId/invite
+ * Retrieves the invite code for a private room (owner only).
+ */
+async function getRoomInviteController(req, res) {
+  try {
+    const userId = req.user?.userId || req.user?.id || req.user?._id;
+    const { roomId } = req.params;
+
+    const inviteCode = await roomService.getRoomInvite(roomId, userId);
+    return res.status(200).json({
+      ok: true,
+      inviteCode,
+    });
+  } catch (err) {
+    const status = err.status || 500;
+    return res.status(status).json({
+      ok: false,
+      error: err.message || 'Failed to fetch invite code',
+    });
+  }
+}
+
+/**
+ * Controller for POST /api/rooms/:roomId/invite/rotate
+ * Rotates the invite code for a private room (owner only).
+ */
+async function rotateRoomInviteController(req, res) {
+  try {
+    const userId = req.user?.userId || req.user?.id || req.user?._id;
+    const { roomId } = req.params;
+
+    const inviteCode = await roomService.rotateRoomInvite(roomId, userId);
+    return res.status(200).json({
+      ok: true,
+      inviteCode,
+    });
+  } catch (err) {
+    const status = err.status || 500;
+    return res.status(status).json({
+      ok: false,
+      error: err.message || 'Failed to rotate invite code',
+    });
+  }
+}
+
 module.exports = {
   createRoomController,
   listRoomsController,
   getRoomController,
   joinRoomController,
+  getRoomInviteController,
+  rotateRoomInviteController,
 };

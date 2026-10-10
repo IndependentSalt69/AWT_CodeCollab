@@ -5,22 +5,23 @@ const {
   loginController,
   meController,
 } = require('../controllers/authController');
+const { registerLimiter, loginLimiter } = require('../middleware/rateLimiter');
 
 const router = express.Router();
 
 /**
  * @route   POST /api/auth/register
- * @desc    Register a new user account
+ * @desc    Register a new user account (rate-limited)
  * @access  Public
  */
-router.post('/register', registerController);
+router.post('/register', registerLimiter, registerController);
 
 /**
  * @route   POST /api/auth/login
- * @desc    Authenticate user credentials and receive JWT
+ * @desc    Authenticate user credentials and receive JWT (rate-limited)
  * @access  Public
  */
-router.post('/login', loginController);
+router.post('/login', loginLimiter, loginController);
 
 /**
  * @route   GET /api/auth/me

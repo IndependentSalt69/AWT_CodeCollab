@@ -11,7 +11,7 @@ module.exports = function registerRoomHandlers(io, socket) {
   socket.data.roomVerifiedUsers = roomVerifiedUsers;
 
   socket.on('room:join', async ({ roomId, user, token } = {}, callback) => {
-    if (!roomId || typeof roomId !== 'string') {
+    if (!roomId || typeof roomId !== 'string' || !roomId.trim()) {
       callback?.({
         ok: false,
         error: 'roomId is required',
@@ -32,95 +32,75 @@ module.exports = function registerRoomHandlers(io, socket) {
       }
     }
 
-    // Database persistent room membership verification
-    const isDbConfigured =
-      process.env.NODE_ENV === 'production' ||
-      Boolean(process.env.MONGO_URI) ||
-      process.env.REQUIRE_ROOM_AUTH === 'true' ||
-      Boolean(Room.findOne && Room.findOne.mock) ||
-      mongoose.connection.readyState !== 0;
-
-    if (isDbConfigured) {
-      const isDbConnected = mongoose.connection.readyState === 1;
-      const isMocked = Boolean(Room.findOne && Room.findOne.mock);
-
-      // Situation 4: MongoDB is disconnected
-      if (!isDbConnected && !isMocked) {
-        callback?.({
-          ok: false,
-          error: 'Database connection error: service unavailable',
-        });
-        return;
-      }
-
-      let roomDoc = null;
-      try {
-        const query = mongoose.Types.ObjectId.isValid(roomId)
-          ? { $or: [{ roomId }, { _id: roomId }] }
-          : { roomId };
-        roomDoc = await Room.findOne(query);
-      } catch (err) {
-        // Situation 5: The room lookup throws an error
-        callback?.({
-          ok: false,
-          error: 'Database error occurred during room authorization',
-        });
-        return;
-      }
-
-      // Situation 3: The room document does not exist
-      if (!roomDoc) {
-        callback?.({
-          ok: false,
-          error: 'Room not found',
-        });
-        return;
-      }
-
-      // Situation 6: The socket is unauthenticated or has missing verified user metadata
-      const rawCallerId = verifiedUser && (verifiedUser.userId || verifiedUser.id || verifiedUser._id);
-      if (!verifiedUser || !rawCallerId) {
-        callback?.({
-          ok: false,
-          error: 'Authentication required to join this room',
-        });
-        return;
-      }
-
-      const callerId = String(rawCallerId);
-      const isOwner = roomDoc.owner && String(roomDoc.owner._id || roomDoc.owner) === callerId;
-      const isMember = Array.isArray(roomDoc.members) && roomDoc.members.some(
-        (m) => String(m._id || m) === callerId
-      );
-
-      // Situation 2: The room exists but the user is not a member
-      if (!isOwner && !isMember) {
-        callback?.({
-          ok: false,
-          error: 'Access denied: You are not a member of this room',
-        });
-        return;
-      }
+    // 1. Enforce authenticated caller identity
+    const rawCallerId = verifiedUser && (verifiedUser.userId || verifiedUser.id || verifiedUser._id);
+    if (!verifiedUser || !rawCallerId) {
+      callback?.({
+        ok: false,
+        error: 'Authentication required to join this room',
+      });
+      return;
     }
 
-    // Secure identity binding:
-    // If the socket was verified via handshake or join token, use verified identity.
-    // If unverified, user payload is recorded for display name only.
-    const effectiveUser = verifiedUser
-      ? {
-          _id: verifiedUser.userId || verifiedUser.id || verifiedUser._id,
-          id: verifiedUser.userId || verifiedUser.id || verifiedUser._id,
-          userId: verifiedUser.userId || verifiedUser.id || verifiedUser._id,
-          username: verifiedUser.username,
-          email: verifiedUser.email,
-          name: verifiedUser.username,
-        }
-      : user || null;
-
-    if (verifiedUser) {
-      roomVerifiedUsers.set(roomId, effectiveUser);
+    // 2. Fail closed if database is disconnected or unavailable
+    if (mongoose.connection.readyState !== 1) {
+      callback?.({
+        ok: false,
+        error: 'Database connection error: service unavailable',
+      });
+      return;
     }
 
+    // 3. Database persistent room lookup
+    let roomDoc = null;
+    try {
+      const query = mongoose.Types.ObjectId.isValid(roomId)
+        ? { $or: [{ roomId }, { _id: roomId }] }
+        : { roomId };
+      roomDoc = await Room.findOne(query);
+    } catch (err) {
+      callback?.({
+        ok: false,
+        error: 'Database error occurred during room authorization',
+      });
+      return;
+    }
+
+    // 4. Reject unknown rooms
+    if (!roomDoc) {
+      callback?.({
+        ok: false,
+        error: 'Room not found',
+      });
+      return;
+    }
+
+    // 5. Verify room membership or ownership
+    const callerId = String(rawCallerId);
+    const isOwner = roomDoc.owner && String(roomDoc.owner._id || roomDoc.owner) === callerId;
+    const isMember = Array.isArray(roomDoc.members) && roomDoc.members.some(
+      (m) => String(m._id || m) === callerId
+    );
+
+    if (!isOwner && !isMember) {
+      callback?.({
+        ok: false,
+        error: 'Access denied: You are not a member of this room',
+      });
+      return;
+    }
+
+    // 6. Secure identity binding derived strictly from verified state
+    const effectiveUser = {
+      _id: callerId,
+      id: callerId,
+      userId: callerId,
+      username: verifiedUser.username || verifiedUser.name || 'Anonymous',
+      email: verifiedUser.email || '',
+      name: verifiedUser.name || verifiedUser.username || 'Anonymous',
+    };
+
+    roomVerifiedUsers.set(roomId, effectiveUser);
     const alreadyJoined = memberships.has(roomId);
     memberships.set(roomId, effectiveUser);
     socket.join(roomId);

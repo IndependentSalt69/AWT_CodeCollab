@@ -92,6 +92,7 @@ describe('Realtime Room Persistence & Authorization Protocol (M0.8)', () => {
       return Promise.resolve(target);
     });
 
+    mongoose.connection.readyState = 1;
     server = http.createServer();
     io = initRealtimeServer(server);
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -99,6 +100,7 @@ describe('Realtime Room Persistence & Authorization Protocol (M0.8)', () => {
   });
 
   afterAll(async () => {
+    mongoose.connection.readyState = 0;
     if (Room.findOne.mockRestore) {
       Room.findOne.mockRestore();
     }
@@ -233,10 +235,7 @@ describe('Realtime Room Persistence & Authorization Protocol (M0.8)', () => {
   it('should reject joining room when database is disconnected (fail-closed, no authorization bypass)', async () => {
     const protectedRoomId = 'algo-protected-db-down';
 
-    // Temporarily restore mock and set REQUIRE_ROOM_AUTH to simulate disconnected DB
-    const mockImpl = Room.findOne.getMockImplementation();
-    Room.findOne.mockRestore();
-    process.env.REQUIRE_ROOM_AUTH = 'true';
+    mongoose.connection.readyState = 0;
 
     try {
       const client = createClient(tokenAlice);
@@ -252,8 +251,7 @@ describe('Realtime Room Persistence & Authorization Protocol (M0.8)', () => {
 
       client.disconnect();
     } finally {
-      delete process.env.REQUIRE_ROOM_AUTH;
-      jest.spyOn(Room, 'findOne').mockImplementation(mockImpl);
+      mongoose.connection.readyState = 1;
     }
   });
 

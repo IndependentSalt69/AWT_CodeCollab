@@ -17,19 +17,29 @@ const LANGUAGE_IMAGE_MAP = {
 
 /**
  * Converts memory string (e.g. '256m', '512m', '1g') or number to bytes.
+ * Returns null if input is invalid, NaN, or non-positive.
  */
 function parseMemoryToBytes(mem) {
+  if (mem === undefined || mem === null) {
+    return sandboxConfig.MAX_MEMORY_BYTES;
+  }
   if (typeof mem === 'number') {
-    return mem;
+    if (isNaN(mem) || mem <= 0 || !isFinite(mem)) {
+      return null;
+    }
+    return Math.round(mem);
   }
-  if (!mem || typeof mem !== 'string') {
-    return 256 * 1024 * 1024;
+  if (typeof mem !== 'string') {
+    return null;
   }
-  const match = mem.trim().match(/^(\d+(?:\.\d+)?)\s*([kmgKMG]?)(?:b|B)?$/);
+  const match = mem.trim().match(/^(\d+(?:\.\d+)?)\s*([kmgKMG]?)(?:b|B)?$/i);
   if (!match) {
-    return 256 * 1024 * 1024;
+    return null;
   }
   const val = parseFloat(match[1]);
+  if (isNaN(val) || val <= 0 || !isFinite(val)) {
+    return null;
+  }
   const unit = match[2].toLowerCase();
   if (unit === 'g') return Math.round(val * 1024 * 1024 * 1024);
   if (unit === 'm') return Math.round(val * 1024 * 1024);
@@ -57,8 +67,8 @@ function parseCpuToNanoCPUs(cpu) {
  * @param {Object} options
  * @param {string} options.language - 'python'
  * @param {string} options.code - User source code
- * @param {number} [options.timeout] - Max execution time in ms (default 5000)
- * @param {string|number} [options.memory] - Max memory (default '256m')
+ * @param {number} [options.timeout] - Max execution time in ms (default 5000, capped at 10000)
+ * @param {string|number} [options.memory] - Max memory (default '256m', capped at 256m)
  * @param {string|number} [options.cpu] - CPU quota (default '0.5')
  * @param {boolean} [options.network] - Network access (default false)
  * @returns {Promise<Object>} Execution result object
@@ -66,8 +76,8 @@ function parseCpuToNanoCPUs(cpu) {
 async function runInSandbox({
   language,
   code,
-  timeout = sandboxConfig.timeoutMs,
-  memory = sandboxConfig.memory,
+  timeout = sandboxConfig.DEFAULT_TIMEOUT_MS,
+  memory = sandboxConfig.DEFAULT_MEMORY,
   cpu = sandboxConfig.cpu,
   network = sandboxConfig.network,
 }) {
@@ -78,10 +88,30 @@ async function runInSandbox({
     throw new Error(`Unsupported execution language: ${language}`);
   }
 
+  if (typeof code !== 'string') {
+    throw new Error('Code must be a string');
+  }
+
+  // Defensive code size safety boundary (64 KiB)
+  if (Buffer.byteLength(code, 'utf8') > sandboxConfig.MAX_CODE_SIZE_BYTES) {
+    throw new Error(`Code exceeds maximum allowed size of ${sandboxConfig.MAX_CODE_SIZE_BYTES / 1024}KB`);
+  }
+
   const docker = getDockerClient();
-  const memoryBytes = parseMemoryToBytes(memory);
+
+  // Parse and enforce hard safety ceilings
+  let parsedMemoryBytes = parseMemoryToBytes(memory);
+  if (parsedMemoryBytes === null || parsedMemoryBytes <= 0) {
+    parsedMemoryBytes = sandboxConfig.MAX_MEMORY_BYTES;
+  }
+  const memoryBytes = Math.min(parsedMemoryBytes, sandboxConfig.MAX_MEMORY_BYTES);
+
   const nanoCPUs = parseCpuToNanoCPUs(cpu);
-  const timeoutMs = typeof timeout === 'number' && timeout > 0 ? timeout : sandboxConfig.timeoutMs;
+
+  let rawTimeout = typeof timeout === 'number' && timeout > 0 && !isNaN(timeout)
+    ? timeout
+    : sandboxConfig.DEFAULT_TIMEOUT_MS;
+  const timeoutMs = Math.min(rawTimeout, sandboxConfig.MAX_TIMEOUT_MS);
 
   let container = null;
   const startTime = Date.now();
@@ -89,7 +119,7 @@ async function runInSandbox({
   let timer = null;
 
   try {
-    // 1. Create ephemeral container with resource limits & isolation
+    // 1. Create ephemeral container with resource limits, read-only rootfs & isolation
     container = await docker.createContainer({
       Image: imageName,
       Cmd: ['--code', code],
@@ -103,6 +133,10 @@ async function runInSandbox({
         NanoCPUs: nanoCPUs,
         NetworkMode: network ? 'bridge' : 'none',
         PidsLimit: 64,
+        ReadonlyRootfs: true,
+        CapDrop: ['ALL'],
+        SecurityOpt: ['no-new-privileges:true'],
+        Tmpfs: { '/tmp': 'rw,noexec,nosuid,size=32m' },
       },
     });
 
@@ -116,14 +150,53 @@ async function runInSandbox({
     const stdoutStream = new PassThrough();
     const stderrStream = new PassThrough();
 
+    const MAX_OUTPUT = sandboxConfig.MAX_OUTPUT_BUFFER_BYTES;
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
     let stdoutBuffer = '';
     let stderrBuffer = '';
+    let outputLimitExceeded = false;
+    let limitExceededReason = '';
 
     stdoutStream.on('data', (chunk) => {
+      if (outputLimitExceeded) return;
+      const chunkBytes = Buffer.byteLength(chunk);
+      if (stdoutBytes + chunkBytes > MAX_OUTPUT) {
+        outputLimitExceeded = true;
+        limitExceededReason = 'stdout exceeded maximum limit of 64KB';
+        const remaining = Math.max(0, MAX_OUTPUT - stdoutBytes);
+        if (remaining > 0) {
+          stdoutBuffer += chunk.slice(0, remaining).toString('utf8');
+          stdoutBytes += remaining;
+        }
+        stdoutBuffer += '\n[Output truncated: exceeded 64KB limit]';
+        if (container) {
+          container.kill().catch(() => {});
+        }
+        return;
+      }
+      stdoutBytes += chunkBytes;
       stdoutBuffer += chunk.toString('utf8');
     });
 
     stderrStream.on('data', (chunk) => {
+      if (outputLimitExceeded) return;
+      const chunkBytes = Buffer.byteLength(chunk);
+      if (stderrBytes + chunkBytes > MAX_OUTPUT) {
+        outputLimitExceeded = true;
+        limitExceededReason = 'stderr exceeded maximum limit of 64KB';
+        const remaining = Math.max(0, MAX_OUTPUT - stderrBytes);
+        if (remaining > 0) {
+          stderrBuffer += chunk.slice(0, remaining).toString('utf8');
+          stderrBytes += remaining;
+        }
+        stderrBuffer += '\n[Output truncated: exceeded 64KB limit]';
+        if (container) {
+          container.kill().catch(() => {});
+        }
+        return;
+      }
+      stderrBytes += chunkBytes;
       stderrBuffer += chunk.toString('utf8');
     });
 
@@ -160,6 +233,27 @@ async function runInSandbox({
 
     const executionTimeMs = Date.now() - startTime;
 
+    // Output limit termination takes precedence over timeout
+    if (outputLimitExceeded) {
+      return {
+        language: normalizedLang,
+        stdout: stdoutBuffer,
+        stderr: stderrBuffer + (stderrBuffer ? '\n' : '') + `Execution failed: ${limitExceededReason}`,
+        exitCode: 137,
+        executionTimeMs,
+        timedOut: false,
+        outputLimitExceeded: true,
+        status: 'failed',
+        limits: {
+          timeout: timeoutMs,
+          memory: memoryBytes,
+          cpu: nanoCPUs,
+          network,
+          maxOutputBytes: MAX_OUTPUT,
+        },
+      };
+    }
+
     if (timedOut || outcome.timedOut) {
       return {
         language: normalizedLang,
@@ -169,7 +263,13 @@ async function runInSandbox({
         executionTimeMs,
         timedOut: true,
         status: 'timeout',
-        limits: { timeout: timeoutMs, memory: memoryBytes, cpu: nanoCPUs, network },
+        limits: {
+          timeout: timeoutMs,
+          memory: memoryBytes,
+          cpu: nanoCPUs,
+          network,
+          maxOutputBytes: MAX_OUTPUT,
+        },
       };
     }
 
@@ -183,7 +283,13 @@ async function runInSandbox({
       executionTimeMs,
       timedOut: false,
       status: exitCode === 0 ? 'completed' : 'failed',
-      limits: { timeout: timeoutMs, memory: memoryBytes, cpu: nanoCPUs, network },
+      limits: {
+        timeout: timeoutMs,
+        memory: memoryBytes,
+        cpu: nanoCPUs,
+        network,
+        maxOutputBytes: MAX_OUTPUT,
+      },
     };
   } finally {
     if (timer) {

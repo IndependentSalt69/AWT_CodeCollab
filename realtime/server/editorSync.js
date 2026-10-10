@@ -28,6 +28,11 @@ module.exports = function registerEditorHandlers(io, socket) {
       return;
     }
 
+    if (Buffer.byteLength(code, 'utf8') > 64 * 1024) {
+      callback?.({ ok: false, error: 'Code exceeds maximum allowed size of 64 KiB' });
+      return;
+    }
+
     if (typeof language !== 'string' || !language.trim()) {
       callback?.({ ok: false, error: 'language must be a non-empty string' });
       return;

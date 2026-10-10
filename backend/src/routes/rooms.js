@@ -5,6 +5,8 @@ const {
   listRoomsController,
   getRoomController,
   joinRoomController,
+  getRoomInviteController,
+  rotateRoomInviteController,
 } = require('../controllers/roomController');
 
 const router = express.Router();
@@ -46,5 +48,19 @@ router.get('/:roomId', getRoomController);
  * @access  Private
  */
 router.post('/:roomId/join', joinRoomController);
+
+/**
+ * @route   GET /api/rooms/:roomId/invite
+ * @desc    Get invite code for a private room (owner only)
+ * @access  Private
+ */
+router.get('/:roomId/invite', getRoomInviteController);
+
+/**
+ * @route   POST /api/rooms/:roomId/invite/rotate
+ * @desc    Rotate invite code for a private room (owner only)
+ * @access  Private
+ */
+router.post('/:roomId/invite/rotate', rotateRoomInviteController);
 
 module.exports = router;

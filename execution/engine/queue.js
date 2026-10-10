@@ -5,6 +5,7 @@ const sandboxConfig = require('./sandboxConfig');
 
 const EXECUTION_QUEUE_NAME = 'codecollab-execution-queue';
 const DEFAULT_CONCURRENCY = 2; // Bounded concurrency targeting 2-4 simultaneous executions
+const MAX_WAITING_JOBS = sandboxConfig.MAX_WAITING_JOBS || 25;
 
 /**
  * Parses a Redis connection string into connection options suitable for ioredis/BullMQ.
@@ -41,6 +42,9 @@ class ExecutionQueue {
     this.concurrency = typeof options.concurrency === 'number'
       ? options.concurrency
       : (parseInt(process.env.EXECUTION_CONCURRENCY, 10) || DEFAULT_CONCURRENCY);
+    this.maxWaitingJobs = typeof options.maxWaitingJobs === 'number'
+      ? options.maxWaitingJobs
+      : MAX_WAITING_JOBS;
 
     this.connectionOptions = options.connection || parseRedisUrl(this.redisUrl);
 
@@ -144,7 +148,7 @@ class ExecutionQueue {
   }
 
   /**
-   * Adds an execution job to the queue.
+   * Adds an execution job to the queue with admission-control capacity check.
    *
    * @param {Object} jobSpec
    * @param {string} jobSpec.language - 'python'
@@ -159,13 +163,39 @@ class ExecutionQueue {
       throw new Error('Language and code are required for execution');
     }
 
-    const { language, code, timeout = sandboxConfig.timeoutMs, memory = sandboxConfig.memory, roomId, userId } = jobSpec;
+    const {
+      language,
+      code,
+      timeout = sandboxConfig.DEFAULT_TIMEOUT_MS,
+      memory = sandboxConfig.DEFAULT_MEMORY,
+      roomId,
+      userId,
+    } = jobSpec;
 
     if (!language || !code) {
       throw new Error('Language and code are required for execution');
     }
 
+    // Defensive code size limit check
+    if (Buffer.byteLength(code, 'utf8') > sandboxConfig.MAX_CODE_SIZE_BYTES) {
+      const sizeErr = new Error(`Code exceeds maximum allowed size of ${sandboxConfig.MAX_CODE_SIZE_BYTES / 1024}KB`);
+      sizeErr.status = 400;
+      throw sizeErr;
+    }
+
     const queue = this.getQueue();
+
+    // Bound the BullMQ backlog (SEC-EXEC-05)
+    const waitingCount = await queue.getWaitingCount();
+    if (waitingCount >= this.maxWaitingJobs) {
+      const capacityErr = new Error(
+        `Execution queue is at capacity (max ${this.maxWaitingJobs} jobs waiting). Please retry shortly.`
+      );
+      capacityErr.status = 429;
+      capacityErr.code = 'QUEUE_CAPACITY_EXCEEDED';
+      throw capacityErr;
+    }
+
     const payload = {
       language,
       code,
@@ -277,4 +307,6 @@ module.exports.ExecutionQueue = ExecutionQueue;
 module.exports.parseRedisUrl = parseRedisUrl;
 module.exports.EXECUTION_QUEUE_NAME = EXECUTION_QUEUE_NAME;
 module.exports.DEFAULT_CONCURRENCY = DEFAULT_CONCURRENCY;
+module.exports.MAX_WAITING_JOBS = MAX_WAITING_JOBS;
+
 

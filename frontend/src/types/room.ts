@@ -12,6 +12,7 @@ export interface Room {
   name: string;
   language: string;
   isPrivate?: boolean;
+  inviteCode?: string;
   currentCode?: string;
   owner: RoomUser | string;
   members: Array<RoomUser | string>;
@@ -27,6 +28,7 @@ export interface CreateRoomPayload {
 
 export interface JoinRoomPayload {
   roomId: string;
+  inviteCode?: string;
 }
 
 export interface RoomResponse {

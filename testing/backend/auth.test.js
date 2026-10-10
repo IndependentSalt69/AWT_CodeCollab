@@ -201,7 +201,7 @@ describe('Backend Authentication API & Identity Binding (M0.7)', () => {
 
       expect(res.status).toBe(409);
       expect(res.body.ok).toBe(false);
-      expect(res.body.error).toContain('already taken');
+      expect(res.body.error).toContain('already registered');
     });
 
     it('should reject duplicate email with 409 Conflict', async () => {
@@ -225,7 +225,7 @@ describe('Backend Authentication API & Identity Binding (M0.7)', () => {
 
       expect(res.status).toBe(409);
       expect(res.body.ok).toBe(false);
-      expect(res.body.error).toContain('already exists');
+      expect(res.body.error).toContain('already registered');
     });
   });
 

@@ -1,7 +1,10 @@
 const http = require('http');
+const mongoose = require('mongoose');
 const { io: connect } = require('socket.io-client');
 const { initRealtimeServer } = require('../../realtime/server');
 const { getDriver } = require('../../realtime/server/driverState');
+const Room = require('../../database/models/Room');
+const { generateToken } = require('../../backend/src/middleware/auth');
 
 const nextEvent = (socket, event) =>
   new Promise((resolve, reject) => {
@@ -29,7 +32,25 @@ describe('Driver state management lifecycle', () => {
   let server;
   let clients;
 
+  const userA_data = { userId: 'user-a-id', id: 'user-a-id', username: 'User A', email: 'a@example.com' };
+  const userB_data = { userId: 'user-b-id', id: 'user-b-id', username: 'User B', email: 'b@example.com' };
+  const userC_data = { userId: 'user-c-id', id: 'user-c-id', username: 'User C', email: 'c@example.com' };
+
+  const tokenA = generateToken(userA_data);
+  const tokenB = generateToken(userB_data);
+  const tokenC = generateToken(userC_data);
+
   beforeEach(async () => {
+    mongoose.connection.readyState = 1;
+    jest.spyOn(Room, 'findOne').mockImplementation((query) => {
+      const targetRoomId = query.roomId || (query.$or && query.$or[0]?.roomId) || 'flow-room';
+      return Promise.resolve({
+        roomId: targetRoomId,
+        owner: userA_data.userId,
+        members: [userA_data.userId, userB_data.userId, userC_data.userId],
+      });
+    });
+
     server = http.createServer();
     io = initRealtimeServer(server);
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -53,6 +74,10 @@ describe('Driver state management lifecycle', () => {
   afterEach(async () => {
     clients.forEach((client) => client.disconnect());
     await new Promise((resolve) => io.close(resolve));
+    if (Room.findOne.mockRestore) {
+      Room.findOne.mockRestore();
+    }
+    mongoose.connection.readyState = 0;
   });
 
   test('full driver lifecycle: empty -> A joins (Driver) -> B/C join (Viewers) -> A transfers to B -> B disconnects -> A/C becomes Driver -> all leave -> state removed', async () => {
@@ -64,21 +89,21 @@ describe('Driver state management lifecycle', () => {
 
     // 2. User A joins -> A becomes Driver
     const driverEventA = nextEvent(userA, 'editor:driver_updated');
-    await emitAck(userA, 'room:join', { roomId, user: { name: 'User A' } });
+    await emitAck(userA, 'room:join', { roomId, token: tokenA });
     const updateA = await driverEventA;
     expect(updateA.driverId).toBe(userA.id);
     expect(getDriver(roomId)).toBe(userA.id);
 
     // 3. User B joins -> B becomes Viewer (driver remains A)
     const driverEventB = nextEvent(userB, 'editor:driver_updated');
-    await emitAck(userB, 'room:join', { roomId, user: { name: 'User B' } });
+    await emitAck(userB, 'room:join', { roomId, token: tokenB });
     const updateB = await driverEventB;
     expect(updateB.driverId).toBe(userA.id);
     expect(getDriver(roomId)).toBe(userA.id);
 
     // 4. User C joins -> C becomes Viewer (driver remains A)
     const driverEventC = nextEvent(userC, 'editor:driver_updated');
-    await emitAck(userC, 'room:join', { roomId, user: { name: 'User C' } });
+    await emitAck(userC, 'room:join', { roomId, token: tokenC });
     const updateC = await driverEventC;
     expect(updateC.driverId).toBe(userA.id);
     expect(getDriver(roomId)).toBe(userA.id);
@@ -150,8 +175,8 @@ describe('Driver state management lifecycle', () => {
     const [userA, userB] = clients;
     const roomId = 'leave-room';
 
-    await emitAck(userA, 'room:join', { roomId, user: { name: 'User A' } });
-    await emitAck(userB, 'room:join', { roomId, user: { name: 'User B' } });
+    await emitAck(userA, 'room:join', { roomId, token: tokenA });
+    await emitAck(userB, 'room:join', { roomId, token: tokenB });
     expect(getDriver(roomId)).toBe(userA.id);
 
     // Driver (User A) explicitly leaves
@@ -171,8 +196,8 @@ describe('Driver state management lifecycle', () => {
     const [userA, userB] = clients;
     const roomId = 'viewer-disconnect-room';
 
-    await emitAck(userA, 'room:join', { roomId, user: { name: 'User A' } });
-    await emitAck(userB, 'room:join', { roomId, user: { name: 'User B' } });
+    await emitAck(userA, 'room:join', { roomId, token: tokenA });
+    await emitAck(userB, 'room:join', { roomId, token: tokenB });
     expect(getDriver(roomId)).toBe(userA.id);
 
     const unexpectedDriverUpdate = jest.fn();
@@ -190,7 +215,7 @@ describe('Driver state management lifecycle', () => {
     const [userA, userB] = clients;
     const roomId = 'reject-room';
 
-    await emitAck(userA, 'room:join', { roomId, user: { name: 'User A' } });
+    await emitAck(userA, 'room:join', { roomId, token: tokenA });
     // userB has not joined 'reject-room'
 
     const res = await emitAck(userA, 'editor:driver_change', {
@@ -206,9 +231,9 @@ describe('Driver state management lifecycle', () => {
     const [userA, userB, userC] = clients;
     const roomId = 'non-driver-transfer-room';
 
-    await emitAck(userA, 'room:join', { roomId, user: { name: 'User A' } });
-    await emitAck(userB, 'room:join', { roomId, user: { name: 'User B' } });
-    await emitAck(userC, 'room:join', { roomId, user: { name: 'User C' } });
+    await emitAck(userA, 'room:join', { roomId, token: tokenA });
+    await emitAck(userB, 'room:join', { roomId, token: tokenB });
+    await emitAck(userC, 'room:join', { roomId, token: tokenC });
 
     // User B is a viewer, tries to transfer driver to C
     const res = await emitAck(userB, 'editor:driver_change', {

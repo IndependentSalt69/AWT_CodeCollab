@@ -95,12 +95,17 @@ export async function getRoomDetails(
 
 export async function joinRoom(
   roomIdOrCode: string,
-  token?: string | null
+  token?: string | null,
+  inviteCode?: string
 ): Promise<RoomResponse> {
   try {
+    const payload: { roomId: string; inviteCode?: string } = { roomId: roomIdOrCode };
+    if (inviteCode && inviteCode.trim()) {
+      payload.inviteCode = inviteCode.trim();
+    }
     const response = await axios.post<RoomResponse>(
       `${API_BASE_URL}/api/rooms/join`,
-      { roomId: roomIdOrCode },
+      payload,
       {
         headers: getAuthHeaders(token),
         timeout: 10000,

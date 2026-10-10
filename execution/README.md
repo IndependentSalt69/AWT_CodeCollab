@@ -107,22 +107,30 @@ Frontend Terminal Output Component (components/terminal/Terminal.tsx -> renders 
 
 ---
 
-## 5. Docker Container Sandboxing & Security (M0.5b)
+## 5. Docker Container Sandboxing & Security (M0.9 Hardened)
 
-Each code run is executed inside an ephemeral container configured with the following isolation parameters:
-- **Memory Limit:** 256 MB (`Memory: 268435456`, `MemorySwap: 268435456`)
-- **CPU Quota:** 0.5 CPU core (`NanoCPUs: 500000000`)
-- **Network Isolation:** Fully disabled (`NetworkMode: 'none'`)
-- **Process / Fork Bomb Limit:** 64 processes max (`PidsLimit: 64`)
-- **Unprivileged User:** Executes as `USER sandbox` (UID 1000)
-- **Safe Payload Delivery:** Direct argument passing (`Cmd: ['--code', code]`) over the Docker Remote API without shell interpolation
-- **Ephemeral Teardown:** Immediate `container.remove({ force: true })` in the execution `finally` block ensuring zero lingering containers
+Each code run is executed inside an ephemeral container configured with the following authoritative isolation parameters:
+- **Memory Ceiling:** 256 MiB (`Memory: 268435456`, `MemorySwap: 268435456`). Client overrides exceeding 256 MiB are rejected with HTTP 400.
+- **Timeout Ceiling:** Default 5,000 ms, hard maximum 10,000 ms. Client overrides exceeding 10,000 ms are rejected with HTTP 400.
+- **CPU Quota:** 0.5 CPU core (`NanoCPUs: 500000000`).
+- **Network Isolation:** Fully disabled (`NetworkMode: 'none'`). Outbound connections and port scans are blocked.
+- **Process / Fork Bomb Limit:** 64 processes max (`PidsLimit: 64`).
+- **Read-Only Root Filesystem:** `ReadonlyRootfs: true`. User processes cannot mutate system or application directories.
+- **Linux Capabilities Dropped:** `CapDrop: ['ALL']`. Container retains zero root capabilities.
+- **Privilege Escalation Blocked:** `SecurityOpt: ['no-new-privileges:true']`.
+- **Restricted Tmpfs Mount:** `Tmpfs: { '/tmp': 'rw,noexec,nosuid,size=32m' }`. Explicit writable scratchpad mounted with `noexec` and `nosuid`.
+- **Bounded Output Buffering:** 64 KiB retained limit per stream (stdout/stderr). When exceeded, container is killed immediately, output is truncated with `\n[Output truncated: exceeded 64KB limit]`, and execution fails with exit code 137 without hanging or leaking memory.
+- **Submitted Code Size Limit:** 64 KiB UTF-8 source code maximum. Enforced in API validation (400), execution engine, and realtime editor sync.
+- **BullMQ Backlog Admission Control:** Queue capacity capped at 25 waiting jobs (`MAX_WAITING_JOBS = 25`). Rejects excess admissions with HTTP 429 (`QUEUE_CAPACITY_EXCEEDED`).
+- **Unprivileged User:** Executes as `USER sandbox` (UID 1000). Runner code in `/app` is owned by `root:root` with read-and-execute-only permissions (`chmod -R 555 /app`).
+- **Safe Payload Delivery:** Direct argument passing (`Cmd: ['--code', code]`) over the Docker Remote API without shell interpolation.
+- **Ephemeral Teardown:** Immediate `container.remove({ force: true })` in the execution `finally` block ensuring zero lingering containers.
 
 ---
 
 ## 6. Python 3.11 Dynamic Runner (`execution/runners/python/`)
 
-The Python 3.11 runner executes dynamic user-submitted code in an unbuffered environment under an unprivileged `sandbox` user.
+The Python 3.11 runner executes dynamic user-submitted code in an unbuffered environment under an unprivileged `sandbox` user with a read-only root filesystem. Bytecode caching is explicitly directed to `/tmp` via `ENV PYTHONPYCACHEPREFIX=/tmp`.
 
 ### Input Methods Supported
 1. **CLI Flag `--code`**: `python runner.py --code "print('hello')"` (used by Dockerode orchestrator).
@@ -132,9 +140,9 @@ The Python 3.11 runner executes dynamic user-submitted code in an unbuffered env
 5. **Environment Variable `SUBMISSION_CODE`**: `SUBMISSION_CODE="print('hello')" python runner.py`.
 
 ### Output & Exit Codes
-- **`stdout`**: Captured directly with unbuffered stream forwarding (`PYTHONUNBUFFERED=1` / `-u`).
-- **`stderr`**: Unhandled exceptions, tracebacks, and syntax errors are output directly to `stderr`.
-- **`exitCode`**: Propagates the exact process return code from user code (e.g. `sys.exit(0)` -> `0`, uncaught exception -> `1`, `sys.exit(42)` -> `42`).
+- **`stdout`**: Captured directly with unbuffered stream forwarding (`PYTHONUNBUFFERED=1` / `-u`). Capped at 64 KiB.
+- **`stderr`**: Unhandled exceptions, tracebacks, and syntax errors are output directly to `stderr`. Capped at 64 KiB.
+- **`exitCode`**: Propagates the exact process return code from user code (e.g. `sys.exit(0)` -> `0`, uncaught exception -> `1`, `sys.exit(42)` -> `42`, output limit kill -> `137`, timeout -> `124`).
 
 ### Building the Docker Image
 ```bash

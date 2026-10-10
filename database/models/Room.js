@@ -41,6 +41,11 @@ const roomSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    inviteCode: {
+      type: String,
+      trim: true,
+      default: null,
+    },
   },
   {
     timestamps: true,
