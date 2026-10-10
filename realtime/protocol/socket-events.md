@@ -4,22 +4,23 @@ This document details the Socket.IO event contract between the CodeCollab client
 
 ## 1. Room Events
 - **`room:join`** (Client → Server)
-  - Payload: `{ roomId: string, user: { name?: string, id?: string, username?: string } }`
-  - Acknowledgment: `{ ok: true, roomId: string, socketId: string }` or `{ ok: false, error: string }` for an invalid room ID.
-  - Every successful join (including a repeated join) sends a snapshot to the joining socket. Repeated joins do not broadcast another arrival.
+  - Payload: `{ roomId: string, user?: { name?: string, id?: string, username?: string }, token?: string }`
+  - Acknowledgment: `{ ok: true, roomId: string, socketId: string }` or `{ ok: false, error: string }`.
+  - **Database Room Authorization (M0.8):** For database-backed persistent rooms, joining clients must be authenticated (via handshake or `token` payload) and must be an owner or persistent member of the room. Unauthenticated clients receive `{ ok: false, error: 'Authentication required to join this room' }`. Authenticated non-members receive `{ ok: false, error: 'Access denied: You are not a member of this room' }`.
+  - Every successful join sends a membership snapshot (`room:members`) to the joining socket before acknowledgment.
 - **`room:members`** (Server → Joining Client)
   - Payload: `{ roomId: string, members: Array<{ socketId: string, user: object }> }`
   - Complete membership snapshot including the joining client, sent before the join acknowledgment. The UI excludes its own socket ID when displaying other members.
-  - Members are identified by socket ID; separate tabs with the same name remain separate members. The current in-memory adapter tracks membership on one server process.
+  - Members are identified by socket ID; separate tabs with the same name remain separate members.
 - **`room:user_joined`** (Server → Room Broadcast)
   - Payload: `{ user: object, socketId: string }`
 - **`room:leave`** (Client → Server)
-  - Payload: `{ roomId: string }` (a legacy `user` field is accepted but ignored).
-  - Acknowledgment: `{ ok: true, roomId: string, socketId: string }` or `{ ok: false, error: string }` for an invalid room ID.
+  - Payload: `{ roomId: string, user?: object }`
+  - Acknowledgment: `{ ok: true, roomId: string, socketId: string }` or `{ ok: false, error: string }`.
+  - **Live Session vs. Persistent Membership:** Leaving a live socket room removes the socket from the active Socket.IO room and updates presence/Driver state. It does NOT delete the user's permanent database membership.
 - **`room:user_left`** (Server → Room Broadcast)
   - Payload: `{ user: object, socketId: string }`
-  - Join/leave notifications go only to other clients in that room and preserve the user object provided on join (including `name`, if supplied).
-  - Explicit leave and disconnect both notify remaining members using the stored user. Leaving an unjoined room has no broadcast; an explicit leave followed by disconnect does not duplicate the notification.
+  - Join/leave notifications go only to other clients in that room. Explicit leave and disconnect both notify remaining members using the stored user.
 
 ## 2. Editor Synchronization & Driver Lifecycle Events
 - **`editor:change`** (Client/Driver → Server)
