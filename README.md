@@ -189,7 +189,7 @@ Visit `http://localhost:3000` to use the app.
 ## Running Tests
 
 ```bash
-# Run all standard automated test suites (18 suites, 222 passing tests)
+# Run all standard automated test suites (21 passing suites, 278 passing tests, 3 skipped)
 npm test
 
 # Run opt-in live MongoDB integration tests against local disposable instance (1 suite, 3 tests)
