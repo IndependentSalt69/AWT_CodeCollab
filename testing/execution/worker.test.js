@@ -1,6 +1,7 @@
 const { startWorker, stopWorker, shutdown, getWorker, processJob, sanitizeRedisUrl, validateWorkerPreflight } = require('../../execution/worker');
 const { ExecutionQueue } = require('../../execution/engine/queue');
 const executeCode = require('../../execution/engine/executeCode');
+const { verifyRedisPreflight } = require('../redisTestHelper');
 
 describe('Standalone Execution Worker Suite (M1.0 Phase A)', () => {
   const testQueueName = `test-worker-queue-${Date.now()}`;
@@ -8,6 +9,7 @@ describe('Standalone Execution Worker Suite (M1.0 Phase A)', () => {
   let workerInstance;
 
   beforeAll(async () => {
+    await verifyRedisPreflight();
     testQueue = new ExecutionQueue({
       queueName: testQueueName,
       concurrency: 2,

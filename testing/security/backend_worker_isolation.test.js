@@ -10,6 +10,7 @@ const ExecutionRun = require('../../database/models/ExecutionRun');
 const Room = require('../../database/models/Room');
 const { startWorker, stopWorker } = require('../../execution/worker');
 const sandboxConfig = require('../../execution/engine/sandboxConfig');
+const { verifyRedisPreflight } = require('../redisTestHelper');
 
 describe('Backend-Worker Isolation & Privilege Separation Suite (M1.0 Phase A)', () => {
   let app;
@@ -32,6 +33,7 @@ describe('Backend-Worker Isolation & Privilege Separation Suite (M1.0 Phase A)',
   const viewerToken = generateToken(viewerUser);
 
   beforeAll(async () => {
+    await verifyRedisPreflight();
     mongoose.connection.readyState = 1;
     jest.spyOn(ExecutionRun.prototype, 'save').mockResolvedValue(true);
     jest.spyOn(Room, 'findOne').mockImplementation((query) => {
