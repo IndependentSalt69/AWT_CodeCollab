@@ -63,7 +63,8 @@ describe('Security Remediation Batch 3: API Hardening & Access Control', () => {
       name: data.name || 'Test Room',
       language: data.language || 'python',
       isPrivate: Boolean(data.isPrivate),
-      inviteCode: data.inviteCode || null,
+      inviteHash: data.inviteHash !== undefined ? data.inviteHash : (data.inviteCode ? roomService.hashInviteCode(data.inviteCode) : null),
+      inviteExpiresAt: data.inviteExpiresAt !== undefined ? data.inviteExpiresAt : (data.isPrivate ? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) : null),
       currentCode: data.currentCode || '',
       owner: data.owner,
       members: Array.isArray(data.members) ? [...data.members] : [data.owner],
@@ -85,7 +86,8 @@ describe('Security Remediation Batch 3: API Hardening & Access Control', () => {
           name: this.name,
           language: this.language,
           isPrivate: this.isPrivate,
-          inviteCode: this.inviteCode,
+          inviteHash: this.inviteHash,
+          inviteExpiresAt: this.inviteExpiresAt,
           currentCode: this.currentCode,
           owner: this.owner,
           members: this.members,
@@ -300,7 +302,7 @@ describe('Security Remediation Batch 3: API Hardening & Access Control', () => {
       expect(resOwner.body.ok).toBe(true);
     });
 
-    it('allows room owner to retrieve invite code via GET /api/rooms/:roomId/invite', async () => {
+    it('rejects GET /api/rooms/:roomId/invite with 400 because plaintext tokens are hashed at rest', async () => {
       createMockRoom({
         roomId: 'owner-manage-room',
         name: 'Owner Room',
@@ -314,9 +316,9 @@ describe('Security Remediation Batch 3: API Hardening & Access Control', () => {
         .get('/api/rooms/owner-manage-room/invite')
         .set('Authorization', `Bearer ${tokenOwner}`);
 
-      expect(res.status).toBe(200);
-      expect(res.body.ok).toBe(true);
-      expect(res.body.inviteCode).toBe('super-secret-invite-code');
+      expect(res.status).toBe(400);
+      expect(res.body.ok).toBe(false);
+      expect(res.body.error).toContain('Plaintext invite tokens are hashed at rest and cannot be retrieved');
     });
 
     it('rejects non-owner from retrieving invite code with 403', async () => {
@@ -414,6 +416,226 @@ describe('Security Remediation Batch 3: API Hardening & Access Control', () => {
       expect(detailsRes.status).toBe(200);
       expect(detailsRes.body.room.inviteCode).toBeUndefined();
     });
+
+    it('generates cryptographic invite codes with at least 16 random bytes (128 bits, 32 hex chars)', async () => {
+      createMockRoom({
+        roomId: 'crypto-strength-room',
+        name: 'Crypto Strength Room',
+        isPrivate: true,
+        owner: userOwner.userId,
+        members: [userOwner.userId],
+      });
+
+      const rotateRes = await request(app)
+        .post('/api/rooms/crypto-strength-room/invite/rotate')
+        .set('Authorization', `Bearer ${tokenOwner}`);
+
+      expect(rotateRes.status).toBe(200);
+      expect(rotateRes.body.ok).toBe(true);
+      const code = rotateRes.body.inviteCode;
+      expect(code).toBeDefined();
+      expect(typeof code).toBe('string');
+      // 16 bytes encoded as hex produces exactly 32 hex characters (128 bits of entropy)
+      expect(code.length).toBeGreaterThanOrEqual(32);
+      expect(/^[0-9a-f]{32,}$/i.test(code)).toBe(true);
+
+      // Verify alias POST /api/rooms/:roomId/invite generates fresh token
+      const aliasRes = await request(app)
+        .post('/api/rooms/crypto-strength-room/invite')
+        .set('Authorization', `Bearer ${tokenOwner}`);
+
+      expect(aliasRes.status).toBe(200);
+      const aliasCode = aliasRes.body.inviteCode;
+      expect(aliasCode.length).toBeGreaterThanOrEqual(32);
+      expect(/^[0-9a-f]{32,}$/i.test(aliasCode)).toBe(true);
+    });
+
+    it('verifyInviteCode safely handles malformed inputs and invalid lengths without uncaught exceptions', () => {
+      const validCode = crypto.randomBytes(16).toString('hex'); // 32 hex chars
+      const validHash = roomService.hashInviteCode(validCode);
+
+      // Valid match
+      expect(roomService.verifyInviteCode(validHash, validCode)).toBe(true);
+      expect(roomService.verifyInviteCode(` ${validHash} `, validCode)).toBe(true);
+
+      // Wrong code of equal length
+      const wrongSameLength = crypto.randomBytes(16).toString('hex');
+      expect(roomService.verifyInviteCode(validHash, wrongSameLength)).toBe(false);
+
+      // Invalid / mismatched hashes (not 64-char hex)
+      expect(roomService.verifyInviteCode(validCode, validCode)).toBe(false);
+      expect(roomService.verifyInviteCode(validHash.slice(0, 32), validCode)).toBe(false);
+      expect(roomService.verifyInviteCode(validHash + 'extra', validCode)).toBe(false);
+      expect(roomService.verifyInviteCode(validHash, '')).toBe(false);
+      expect(roomService.verifyInviteCode('', validCode)).toBe(false);
+      expect(roomService.verifyInviteCode('', '')).toBe(false);
+      expect(roomService.verifyInviteCode('   ', '   ')).toBe(false);
+
+      // Malformed inputs (types, null, undefined, buffers, numbers, objects)
+      expect(roomService.verifyInviteCode(validHash, null)).toBe(false);
+      expect(roomService.verifyInviteCode(null, validCode)).toBe(false);
+      expect(roomService.verifyInviteCode(validHash, undefined)).toBe(false);
+      expect(roomService.verifyInviteCode(undefined, undefined)).toBe(false);
+      expect(roomService.verifyInviteCode(validHash, 12345678)).toBe(false);
+      expect(roomService.verifyInviteCode(12345678, validCode)).toBe(false);
+      expect(roomService.verifyInviteCode(validHash, { code: validCode })).toBe(false);
+      expect(roomService.verifyInviteCode({ code: validCode }, validCode)).toBe(false);
+      expect(roomService.verifyInviteCode(validHash, ['token'])).toBe(false);
+      expect(roomService.verifyInviteCode(validHash, Buffer.from(validCode))).toBe(false);
+      expect(roomService.verifyInviteCode(validHash, true)).toBe(false);
+    });
+
+    it('verifies SHA-256 hashed invite tokens at rest using timing-safe comparison', () => {
+      const rawToken = crypto.randomBytes(16).toString('hex');
+      const sha256Hash = roomService.hashInviteCode(rawToken);
+
+      expect(typeof sha256Hash).toBe('string');
+      expect(sha256Hash.length).toBe(64); // 256 bits = 64 hex characters
+
+      // Matching raw token against stored SHA-256 hash
+      expect(roomService.verifyInviteCode(sha256Hash, rawToken)).toBe(true);
+      expect(roomService.verifyInviteCode(sha256Hash, `  ${rawToken}  `)).toBe(true);
+
+      // Wrong token against stored SHA-256 hash
+      const wrongToken = crypto.randomBytes(16).toString('hex');
+      expect(roomService.verifyInviteCode(sha256Hash, wrongToken)).toBe(false);
+      expect(roomService.verifyInviteCode(sha256Hash, '')).toBe(false);
+      expect(roomService.verifyInviteCode(sha256Hash, null)).toBe(false);
+    });
+
+    it('allows joining private room authenticated via SHA-256 hash-at-rest without plaintext inviteCode in storage', async () => {
+      const rawToken = crypto.randomBytes(16).toString('hex');
+      const sha256Hash = roomService.hashInviteCode(rawToken);
+
+      createMockRoom({
+        roomId: 'hash-only-private-room',
+        name: 'Hash-At-Rest Room',
+        isPrivate: true,
+        inviteCode: null, // Zero plaintext stored in DB
+        inviteHash: sha256Hash, // Only cryptographic one-way digest stored
+        owner: userOwner.userId,
+        members: [userOwner.userId],
+      });
+
+      // Valid raw token presented by joining user
+      const joinRes = await request(app)
+        .post('/api/rooms/hash-only-private-room/join')
+        .set('Authorization', `Bearer ${tokenAttacker}`)
+        .send({ inviteCode: rawToken });
+
+      expect(joinRes.status).toBe(200);
+      expect(joinRes.body.ok).toBe(true);
+      expect(joinRes.body.room.members).toContain(userAttacker.userId);
+
+      // Invalid token fails
+      const failRes = await request(app)
+        .post('/api/rooms/hash-only-private-room/join')
+        .set('Authorization', `Bearer ${tokenMember}`)
+        .send({ inviteCode: 'incorrect-token-value' });
+
+      expect(failRes.status).toBe(403);
+      expect(failRes.body.error).toContain('Invalid invite code');
+    });
+
+    it('explicitly rejects expired invite codes during authorization with HTTP 403', async () => {
+      const rawToken = crypto.randomBytes(16).toString('hex');
+      const sha256Hash = roomService.hashInviteCode(rawToken);
+      const expiredDate = new Date(Date.now() - 3600000); // Expired 1 hour ago
+
+      createMockRoom({
+        roomId: 'expired-token-room',
+        name: 'Expired Room',
+        isPrivate: true,
+        inviteCode: rawToken,
+        inviteHash: sha256Hash,
+        inviteExpiresAt: expiredDate,
+        owner: userOwner.userId,
+        members: [userOwner.userId],
+      });
+
+      const res = await request(app)
+        .post('/api/rooms/expired-token-room/join')
+        .set('Authorization', `Bearer ${tokenAttacker}`)
+        .send({ inviteCode: rawToken });
+
+      expect(res.status).toBe(403);
+      expect(res.body.ok).toBe(false);
+      expect(res.body.error).toBe('Invite code has expired');
+    });
+
+    it('accepts unexpired invite codes during authorization with HTTP 200', async () => {
+      const rawToken = crypto.randomBytes(16).toString('hex');
+      const sha256Hash = roomService.hashInviteCode(rawToken);
+      const futureDate = new Date(Date.now() + 86400000 * 7); // Valid for 7 days
+
+      createMockRoom({
+        roomId: 'active-token-room',
+        name: 'Active Token Room',
+        isPrivate: true,
+        inviteCode: rawToken,
+        inviteHash: sha256Hash,
+        inviteExpiresAt: futureDate,
+        owner: userOwner.userId,
+        members: [userOwner.userId],
+      });
+
+      const res = await request(app)
+        .post('/api/rooms/active-token-room/join')
+        .set('Authorization', `Bearer ${tokenAttacker}`)
+        .send({ inviteCode: rawToken });
+
+      expect(res.status).toBe(200);
+      expect(res.body.ok).toBe(true);
+      expect(res.body.room.members).toContain(userAttacker.userId);
+    });
+
+    it('redacts inviteHash from all room responses and exposes inviteExpiresAt when present', async () => {
+      const rawToken = crypto.randomBytes(16).toString('hex');
+      const sha256Hash = roomService.hashInviteCode(rawToken);
+      const futureDate = new Date(Date.now() + 86400000 * 7);
+
+      createMockRoom({
+        roomId: 'redacted-hash-room',
+        name: 'Redacted Hash Room',
+        isPrivate: true,
+        inviteCode: rawToken,
+        inviteHash: sha256Hash,
+        inviteExpiresAt: futureDate,
+        owner: userOwner.userId,
+        members: [userOwner.userId, userMember.userId],
+      });
+
+      // Member checks room details
+      const detailsRes = await request(app)
+        .get('/api/rooms/redacted-hash-room')
+        .set('Authorization', `Bearer ${tokenMember}`);
+
+      expect(detailsRes.status).toBe(200);
+      expect(detailsRes.body.room.inviteHash).toBeUndefined();
+      expect(detailsRes.body.room.inviteExpiresAt).toBeDefined();
+
+      // Sanitization utility test directly
+      const mockDoc = {
+        roomId: 'direct-sanitize-check',
+        name: 'Check',
+        isPrivate: true,
+        inviteHash: sha256Hash,
+        inviteExpiresAt: futureDate,
+        owner: userOwner.userId,
+        members: [userOwner.userId],
+      };
+      // When rawToken is passed (e.g. upon creation/rotation), it is returned once
+      const sanitizedWithRaw = roomService.sanitizeRoom(mockDoc, { rawToken });
+      expect(sanitizedWithRaw.inviteCode).toBe(rawToken);
+      expect(sanitizedWithRaw.inviteHash).toBeUndefined();
+      expect(sanitizedWithRaw.inviteExpiresAt).toEqual(futureDate);
+
+      // Ordinary sanitization omits inviteCode and inviteHash completely
+      const standardSanitized = roomService.sanitizeRoom(mockDoc);
+      expect(standardSanitized.inviteCode).toBeUndefined();
+      expect(standardSanitized.inviteHash).toBeUndefined();
+      expect(standardSanitized.inviteExpiresAt).toEqual(futureDate);
+    });
   });
 
   describe('SEC-API-01: Route Rate Limiting', () => {
@@ -442,6 +664,16 @@ describe('Security Remediation Batch 3: API Hardening & Access Control', () => {
 
       rateLimitTestApp.post('/api/test-exec', testExecuteLimiter, (req, res) => {
         res.status(200).json({ ok: true, message: 'exec processed' });
+      });
+
+      const testJoinLimiter = createRateLimiter({
+        windowMs: 60 * 1000,
+        max: 3,
+        message: 'Too many join room attempts. Please try again later.',
+      });
+
+      rateLimitTestApp.post('/api/test-join', testJoinLimiter, (req, res) => {
+        res.status(200).json({ ok: true, message: 'join processed' });
       });
 
       rateLimitTestApp.use(globalErrorHandler);
@@ -477,6 +709,18 @@ describe('Security Remediation Batch 3: API Hardening & Access Control', () => {
       expect(res.status).not.toBe(500);
       expect(res.body.ok).toBe(false);
       expect(res.body.error).toContain('Execution rate limit exceeded');
+    });
+
+    it('enforces route rate limit on join room attempts to prevent online guessing attacks (429)', async () => {
+      for (let i = 0; i < 3; i++) {
+        const res = await request(rateLimitTestApp).post('/api/test-join').send({});
+        expect(res.status).toBe(200);
+      }
+
+      const res4 = await request(rateLimitTestApp).post('/api/test-join').send({});
+      expect(res4.status).toBe(429);
+      expect(res4.body.ok).toBe(false);
+      expect(res4.body.error).toContain('Too many join room attempts');
     });
 
     it('ignores spoofed X-Forwarded-For headers when trust proxy is disabled', async () => {

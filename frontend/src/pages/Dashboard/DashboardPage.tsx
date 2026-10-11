@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Room } from '../../types/room';
-import { listRooms, createRoom, joinRoom } from '../../services/roomService';
+import { listRooms, createRoom, joinRoom, getRoomInvite, rotateRoomInvite } from '../../services/roomService';
 import { useAuth } from '../../context/AuthContext';
 
 interface DashboardPageProps {
@@ -17,14 +17,27 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onSelectRoom }) =>
   const [showCreateModal, setShowCreateModal] = useState<boolean>(false);
   const [newRoomName, setNewRoomName] = useState<string>('');
   const [newRoomLang, setNewRoomLang] = useState<string>('python');
+  const [newRoomIsPrivate, setNewRoomIsPrivate] = useState<boolean>(false);
   const [isCreating, setIsCreating] = useState<boolean>(false);
 
   // Join room modal / form state
   const [showJoinModal, setShowJoinModal] = useState<boolean>(false);
   const [joinCodeInput, setJoinCodeInput] = useState<string>('');
+  const [joinInviteCodeInput, setJoinInviteCodeInput] = useState<string>('');
   const [isJoining, setIsJoining] = useState<boolean>(false);
 
+  // Created private room notice modal state
+  const [createdInviteNotice, setCreatedInviteNotice] = useState<{
+    roomId: string;
+    inviteCode: string;
+    roomName: string;
+    room: Room;
+  } | null>(null);
+
   const [copiedRoomId, setCopiedRoomId] = useState<string | null>(null);
+  const [copiedInviteRoomId, setCopiedInviteRoomId] = useState<string | null>(null);
+  const [roomInviteCodes, setRoomInviteCodes] = useState<Record<string, string>>({});
+  const [fetchingInviteRoomId, setFetchingInviteRoomId] = useState<string | null>(null);
 
   const fetchRooms = async () => {
     setIsLoading(true);
@@ -58,6 +71,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onSelectRoom }) =>
         {
           name: newRoomName.trim(),
           language: newRoomLang,
+          isPrivate: newRoomIsPrivate,
         },
         token
       );
@@ -65,8 +79,23 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onSelectRoom }) =>
       if (res.ok && res.room) {
         setShowCreateModal(false);
         setNewRoomName('');
+        setNewRoomIsPrivate(false);
         setRooms((prev) => [res.room!, ...prev]);
-        onSelectRoom(res.room);
+
+        if (res.room.isPrivate && res.room.inviteCode) {
+          setRoomInviteCodes((prev) => ({
+            ...prev,
+            [res.room!.roomId]: res.room!.inviteCode!,
+          }));
+          setCreatedInviteNotice({
+            roomId: res.room.roomId,
+            inviteCode: res.room.inviteCode,
+            roomName: res.room.name,
+            room: res.room,
+          });
+        } else {
+          onSelectRoom(res.room);
+        }
       } else {
         setError(res.error || 'Failed to create room');
       }
@@ -84,10 +113,15 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onSelectRoom }) =>
     setIsJoining(true);
     setError(null);
     try {
-      const res = await joinRoom(joinCodeInput.trim(), token);
+      const res = await joinRoom(
+        joinCodeInput.trim(),
+        token,
+        joinInviteCodeInput.trim() || undefined
+      );
       if (res.ok && res.room) {
         setShowJoinModal(false);
         setJoinCodeInput('');
+        setJoinInviteCodeInput('');
         // Add if not already in state
         setRooms((prev) => {
           const exists = prev.some((r) => r.roomId === res.room!.roomId);
@@ -110,6 +144,45 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onSelectRoom }) =>
     setTimeout(() => {
       setCopiedRoomId(null);
     }, 2000);
+  };
+
+  const handleCopyInviteCode = async (roomId: string, knownCode?: string) => {
+    let code = knownCode || roomInviteCodes[roomId];
+    if (!code) {
+      setFetchingInviteRoomId(roomId);
+      try {
+        const res = await rotateRoomInvite(roomId, token);
+        if (res.ok && res.inviteCode) {
+          code = res.inviteCode;
+          setRoomInviteCodes((prev) => ({ ...prev, [roomId]: res.inviteCode! }));
+          const targetRoom = rooms.find((r) => r.roomId === roomId);
+          if (targetRoom) {
+            setCreatedInviteNotice({
+              roomId,
+              inviteCode: res.inviteCode,
+              roomName: targetRoom.name,
+              room: targetRoom,
+            });
+          }
+        } else {
+          setError(res.error || 'Failed to generate invite code');
+          return;
+        }
+      } catch (_) {
+        setError('Failed to generate invite code');
+        return;
+      } finally {
+        setFetchingInviteRoomId(null);
+      }
+    }
+
+    if (code) {
+      navigator.clipboard?.writeText(code);
+      setCopiedInviteRoomId(roomId);
+      setTimeout(() => {
+        setCopiedInviteRoomId(null);
+      }, 2500);
+    }
   };
 
   return (
@@ -285,6 +358,23 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onSelectRoom }) =>
                 </select>
               </div>
 
+              <div style={{ marginBottom: '1.25rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <input
+                  id="new-room-private-checkbox"
+                  type="checkbox"
+                  checked={newRoomIsPrivate}
+                  onChange={(e) => setNewRoomIsPrivate(e.target.checked)}
+                  disabled={isCreating}
+                  style={{ width: '16px', height: '16px', cursor: 'pointer' }}
+                />
+                <label
+                  htmlFor="new-room-private-checkbox"
+                  style={{ fontSize: '0.875rem', fontWeight: 600, color: '#334155', cursor: 'pointer' }}
+                >
+                  🔒 Private Room (requires 128-bit invite code to join)
+                </label>
+              </div>
+
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
                 <button
                   type="button"
@@ -325,6 +415,113 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onSelectRoom }) =>
         </div>
       )}
 
+      {/* Private Room Creation Success & Invite Code Modal */}
+      {createdInviteNotice && (
+        <div
+          id="private-room-invite-modal"
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(15, 23, 42, 0.55)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1100,
+            padding: '1rem',
+          }}
+        >
+          <div
+            style={{
+              background: '#ffffff',
+              borderRadius: '10px',
+              padding: '1.75rem',
+              maxWidth: '480px',
+              width: '100%',
+              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.15)',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+              <span style={{ fontSize: '1.4rem' }}>🔒</span>
+              <h3 style={{ margin: 0, fontSize: '1.2rem', color: '#0f172a' }}>
+                Private Room Created!
+              </h3>
+            </div>
+            <p style={{ margin: '0 0 1rem', fontSize: '0.875rem', color: '#475569' }}>
+              Your private room <strong>{createdInviteNotice.roomName}</strong> is ready. Collaborators must enter this 128-bit invite code to join:
+            </p>
+
+            <div
+              style={{
+                background: '#f8fafc',
+                border: '1px solid #cbd5e1',
+                borderRadius: '6px',
+                padding: '10px 12px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                marginBottom: '1.25rem',
+                gap: '8px',
+              }}
+            >
+              <code
+                id="created-invite-code-display"
+                style={{
+                  fontSize: '0.85rem',
+                  fontFamily: 'monospace',
+                  color: '#0f172a',
+                  wordBreak: 'break-all',
+                }}
+              >
+                {createdInviteNotice.inviteCode}
+              </code>
+              <button
+                id="copy-created-invite-btn"
+                onClick={() => handleCopyInviteCode(createdInviteNotice.roomId, createdInviteNotice.inviteCode)}
+                style={{
+                  padding: '6px 12px',
+                  fontSize: '0.8rem',
+                  fontWeight: 600,
+                  backgroundColor: copiedInviteRoomId === createdInviteNotice.roomId ? '#16a34a' : '#f1f5f9',
+                  color: copiedInviteRoomId === createdInviteNotice.roomId ? '#ffffff' : '#334155',
+                  border: '1px solid #cbd5e1',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {copiedInviteRoomId === createdInviteNotice.roomId ? '✓ Copied' : '📋 Copy Code'}
+              </button>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button
+                id="enter-created-room-btn"
+                onClick={() => {
+                  const targetRoom = createdInviteNotice.room;
+                  setCreatedInviteNotice(null);
+                  onSelectRoom(targetRoom);
+                }}
+                style={{
+                  padding: '8px 18px',
+                  borderRadius: '6px',
+                  border: 'none',
+                  backgroundColor: '#2563eb',
+                  color: '#ffffff',
+                  fontSize: '0.875rem',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                Enter Room →
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Join Room Modal */}
       {showJoinModal && (
         <div
@@ -354,7 +551,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onSelectRoom }) =>
           >
             <h3 style={{ margin: '0 0 1rem', fontSize: '1.2rem', color: '#0f172a' }}>Join Existing Room</h3>
             <form onSubmit={handleJoinRoom}>
-              <div style={{ marginBottom: '1.5rem' }}>
+              <div style={{ marginBottom: '1rem' }}>
                 <label
                   htmlFor="join-code-input"
                   style={{ display: 'block', fontSize: '0.875rem', fontWeight: 600, color: '#334155', marginBottom: '6px' }}
@@ -369,6 +566,32 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onSelectRoom }) =>
                   onChange={(e) => setJoinCodeInput(e.target.value)}
                   disabled={isJoining}
                   required
+                  style={{
+                    width: '100%',
+                    boxSizing: 'border-box',
+                    padding: '8px 12px',
+                    borderRadius: '6px',
+                    border: '1px solid #cbd5e1',
+                    fontSize: '0.9rem',
+                    fontFamily: 'monospace',
+                  }}
+                />
+              </div>
+
+              <div style={{ marginBottom: '1.5rem' }}>
+                <label
+                  htmlFor="join-invite-code-input"
+                  style={{ display: 'block', fontSize: '0.875rem', fontWeight: 600, color: '#334155', marginBottom: '6px' }}
+                >
+                  Invite Code (required for private rooms)
+                </label>
+                <input
+                  id="join-invite-code-input"
+                  type="text"
+                  placeholder="e.g. a1b2c3d4... (leave blank for public rooms)"
+                  value={joinInviteCodeInput}
+                  onChange={(e) => setJoinInviteCodeInput(e.target.value)}
+                  disabled={isJoining}
                   style={{
                     width: '100%',
                     boxSizing: 'border-box',
@@ -499,19 +722,36 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onSelectRoom }) =>
                     <h3 style={{ margin: 0, fontSize: '1.1rem', color: '#0f172a', fontWeight: 600 }}>
                       {room.name}
                     </h3>
-                    <span
-                      style={{
-                        fontSize: '0.75rem',
-                        fontWeight: 600,
-                        padding: '2px 8px',
-                        borderRadius: '4px',
-                        background: '#eff6ff',
-                        color: '#1d4ed8',
-                        textTransform: 'uppercase',
-                      }}
-                    >
-                      {room.language || 'python'}
-                    </span>
+                    <div style={{ display: 'flex', gap: '6px' }}>
+                      {room.isPrivate && (
+                        <span
+                          data-testid={`room-private-badge-${room.roomId}`}
+                          style={{
+                            fontSize: '0.75rem',
+                            fontWeight: 600,
+                            padding: '2px 8px',
+                            borderRadius: '4px',
+                            background: '#fef3c7',
+                            color: '#92400e',
+                          }}
+                        >
+                          🔒 Private
+                        </span>
+                      )}
+                      <span
+                        style={{
+                          fontSize: '0.75rem',
+                          fontWeight: 600,
+                          padding: '2px 8px',
+                          borderRadius: '4px',
+                          background: '#eff6ff',
+                          color: '#1d4ed8',
+                          textTransform: 'uppercase',
+                        }}
+                      >
+                        {room.language || 'python'}
+                      </span>
+                    </div>
                   </div>
 
                   {/* Room ID Badge with Copy Action */}
@@ -547,6 +787,54 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onSelectRoom }) =>
                       {copiedRoomId === room.roomId ? '✓ Copied' : '📋'}
                     </button>
                   </div>
+
+                  {/* Private Room Owner Invite Row */}
+                  {room.isPrivate && isOwner && (
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '6px',
+                        background: '#fffbeb',
+                        padding: '4px 8px',
+                        borderRadius: '4px',
+                        border: '1px solid #fde68a',
+                        marginBottom: '10px',
+                      }}
+                    >
+                      <span style={{ fontSize: '0.75rem', color: '#92400e', fontWeight: 600 }}>Invite:</span>
+                      <code
+                        data-testid={`invite-code-${room.roomId}`}
+                        style={{ fontSize: '0.75rem', fontFamily: 'monospace', color: '#78350f', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}
+                      >
+                        {roomInviteCodes[room.roomId] || '••••••••••••••••'}
+                      </code>
+                      <button
+                        id={`copy-invite-btn-${room.roomId}`}
+                        data-testid={`copy-invite-btn-${room.roomId}`}
+                        onClick={() => handleCopyInviteCode(room.roomId, roomInviteCodes[room.roomId])}
+                        disabled={fetchingInviteRoomId === room.roomId}
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          padding: '2px 4px',
+                          fontSize: '0.75rem',
+                          color: copiedInviteRoomId === room.roomId ? '#16a34a' : '#b45309',
+                          cursor: 'pointer',
+                          fontWeight: 600,
+                        }}
+                      >
+                        {copiedInviteRoomId === room.roomId
+                          ? '✓ Copied'
+                          : fetchingInviteRoomId === room.roomId
+                          ? '⏳ Generating...'
+                          : roomInviteCodes[room.roomId]
+                          ? '📋 Copy Invite'
+                          : '🔄 Generate / Copy'}
+                      </button>
+                    </div>
+                  )}
 
                   <div style={{ fontSize: '0.8rem', color: '#64748b', marginBottom: '12px', display: 'flex', gap: '12px' }}>
                     <span>👥 {memberCount} {memberCount === 1 ? 'member' : 'members'}</span>

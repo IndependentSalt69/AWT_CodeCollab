@@ -42,3 +42,9 @@ export interface RoomListResponse {
   rooms?: Room[];
   error?: string;
 }
+
+export interface InviteResponse {
+  ok: boolean;
+  inviteCode?: string;
+  error?: string;
+}

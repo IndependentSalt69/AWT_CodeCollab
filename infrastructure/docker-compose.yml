@@ -1,40 +1,112 @@
-version: '3.8'
 
 services:
   backend:
-    build: ../backend
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
     ports:
       - "5000:5000"
     environment:
       - PORT=5000
-      - MONGO_URI=mongodb://mongo:27017/codecollab
-      - JWT_SECRET=dev_secret_key_12345
-      - CLIENT_URL=http://localhost:3000
-      - REDIS_URL=redis://redis:6379
+      - NODE_ENV=production
+      - MONGO_URI=mongodb://${MONGO_APP_USER:-codecollab_app}:${MONGO_APP_PASSWORD}@mongo:27017/codecollab?authSource=codecollab
+      - JWT_SECRET=${JWT_SECRET}
+      - CLIENT_URL=${CLIENT_URL:-http://localhost:3000}
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
     depends_on:
-      - mongo
-      - redis
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:5000/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   frontend:
-    build: ../frontend
+    build:
+      context: ..
+      dockerfile: frontend/Dockerfile
+    restart: unless-stopped
     ports:
       - "3000:3000"
     depends_on:
-      - backend
+      backend:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:3000/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
 
   mongo:
     image: mongo:6
     restart: unless-stopped
+    # SEC-INFRA-01: Bind port strictly to 127.0.0.1 to avoid public host interface exposure
     ports:
-      - "27017:27017"
+      - "127.0.0.1:27017:27017"
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=${MONGO_ROOT_USER}
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_ROOT_PASSWORD}
+      - MONGO_INITDB_DATABASE=codecollab
+      - MONGO_APP_USER=${MONGO_APP_USER:-codecollab_app}
+      - MONGO_APP_PASSWORD=${MONGO_APP_PASSWORD}
     volumes:
       - mongo-data:/data/db
+      - ./docker/mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    # SEC-INFRA-01: Bind port strictly to 127.0.0.1 to avoid public host interface exposure
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  # SEC-INFRA-02: Isolated Execution Worker Profile
+  # CRITICAL SECURITY NOTICE:
+  # Mounting /var/run/docker.sock into a container gives the container root-equivalent control
+  # over the host system. This worker is isolated to the opt-in 'local-dev-execution' profile
+  # and MUST NOT be used for public/untrusted multi-tenant staging or production deployments.
+  execution-worker:
+    profiles:
+      - local-dev-execution
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=development
+      - PORT=5001
+      - MONGO_URI=mongodb://${MONGO_APP_USER:-codecollab_app}:${MONGO_APP_PASSWORD}@mongo:27017/codecollab?authSource=codecollab
+      - JWT_SECRET=${JWT_SECRET}
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
 
 volumes:
   mongo-data:
+  redis-data:

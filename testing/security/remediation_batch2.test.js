@@ -461,4 +461,10 @@ describe('Security Remediation Batch 2: Sandbox & Resource Hardening', () => {
       getLengthSpy.mockRestore();
     });
   });
+
+  afterAll(async () => {
+    if (executionQueue && typeof executionQueue.close === 'function') {
+      await executionQueue.close();
+    }
+  });
 });

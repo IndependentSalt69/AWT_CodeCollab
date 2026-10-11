@@ -17,20 +17,43 @@ function generateRoomId(name) {
 }
 
 /**
- * Timing-safe string comparison to prevent timing attacks on invite code verification.
+ * Hashes an invite code token with SHA-256 for secure storage and comparison.
  */
-function verifyInviteCode(storedCode, providedCode) {
-  if (typeof storedCode !== 'string' || typeof providedCode !== 'string') {
+function hashInviteCode(code) {
+  if (typeof code !== 'string') return null;
+  return crypto.createHash('sha256').update(code.trim().toLowerCase()).digest('hex');
+}
+
+/**
+ * Timing-safe string comparison to verify a provided invite token against its SHA-256 hash at rest.
+ * Prevents side-channel timing attacks on invite code verification.
+ */
+function verifyInviteCode(storedHash, providedCode) {
+  try {
+    if (typeof storedHash !== 'string' || typeof providedCode !== 'string') {
+      return false;
+    }
+    const cleanStored = storedHash.trim();
+    const cleanProvided = providedCode.trim();
+    if (!cleanStored || !cleanProvided) {
+      return false;
+    }
+
+    // Must be a 64-character hex string (SHA-256 hash)
+    if (!/^[0-9a-f]{64}$/i.test(cleanStored)) {
+      return false;
+    }
+
+    const candidateHash = hashInviteCode(cleanProvided);
+    const hashBuf = Buffer.from(cleanStored.toLowerCase(), 'utf8');
+    const candBuf = Buffer.from(candidateHash, 'utf8');
+    if (hashBuf.length !== candBuf.length || hashBuf.length === 0) {
+      return false;
+    }
+    return crypto.timingSafeEqual(hashBuf, candBuf);
+  } catch (_) {
     return false;
   }
-  const cleanStored = storedCode.trim();
-  const cleanProvided = providedCode.trim();
-  const storedBuf = Buffer.from(cleanStored);
-  const providedBuf = Buffer.from(cleanProvided);
-  if (storedBuf.length !== providedBuf.length) {
-    return false;
-  }
-  return crypto.timingSafeEqual(storedBuf, providedBuf);
 }
 
 /**
@@ -59,23 +82,30 @@ function sanitizeRoom(room, options = {}) {
         : doc.owner.toString()
       : null,
     members: Array.isArray(doc.members)
-      ? doc.members.map((m) =>
-          typeof m === 'object'
-            ? {
-                id: m._id?.toString() || m.id,
-                _id: m._id?.toString() || m.id,
-                username: m.username,
-                email: m.email,
-              }
-            : m.toString()
-        )
+      ? doc.members
+          .filter(Boolean)
+          .map((m) =>
+            typeof m === 'object'
+              ? {
+                  id: m._id?.toString() || m.id,
+                  _id: m._id?.toString() || m.id,
+                  username: m.username,
+                  email: m.email,
+                }
+              : m.toString()
+          )
       : [],
     createdAt: doc.createdAt,
     updatedAt: doc.updatedAt,
   };
 
-  if (options.includeInvite && doc.inviteCode) {
-    sanitized.inviteCode = doc.inviteCode;
+  if (doc.inviteExpiresAt) {
+    sanitized.inviteExpiresAt = doc.inviteExpiresAt;
+  }
+
+  // Plaintext token is only returned once when explicitly supplied (e.g. upon room creation)
+  if (options.rawToken) {
+    sanitized.inviteCode = options.rawToken;
   }
 
   return sanitized;
@@ -121,7 +151,9 @@ async function createRoom({ name, language, isPrivate }, userId) {
 
   try {
     const isRoomPrivate = Boolean(isPrivate);
-    const inviteCode = isRoomPrivate ? crypto.randomBytes(8).toString('hex') : null;
+    const rawToken = isRoomPrivate ? crypto.randomBytes(16).toString('hex') : null;
+    const inviteHash = rawToken ? hashInviteCode(rawToken) : null;
+    const inviteExpiresAt = rawToken ? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) : null;
 
     const room = new Room({
       name: trimmedName,
@@ -130,7 +162,8 @@ async function createRoom({ name, language, isPrivate }, userId) {
       members: [userId], // Creator automatically becomes a member!
       language: effectiveLanguage,
       isPrivate: isRoomPrivate,
-      inviteCode,
+      inviteHash,
+      inviteExpiresAt,
     });
 
     await room.save();
@@ -140,7 +173,7 @@ async function createRoom({ name, language, isPrivate }, userId) {
       await room.populate('members', 'username email');
     }
 
-    return sanitizeRoom(room, { includeInvite: true });
+    return sanitizeRoom(room, { rawToken });
   } catch (err) {
     if (err.status) throw err;
     const dbError = new Error(err.message || 'Failed to create room in database');
@@ -216,9 +249,9 @@ async function getRoomDetails(roomIdOrId, userId) {
   }
 
   const userIdStr = String(userId);
-  const isOwner = room.owner && String(room.owner._id || room.owner) === userIdStr;
+  const isOwner = room.owner && String(room.owner._id || room.owner.id || room.owner) === userIdStr;
   const isMember = Array.isArray(room.members) && room.members.some(
-    (m) => String(m._id || m) === userIdStr
+    (m) => m && String(m._id || m.id || m) === userIdStr
   );
 
   if (!isOwner && !isMember) {
@@ -268,9 +301,9 @@ async function joinRoom(roomIdOrId, userId, options = {}) {
   }
 
   const userIdStr = String(userId);
-  const isOwner = room.owner && String(room.owner._id || room.owner) === userIdStr;
+  const isOwner = room.owner && String(room.owner._id || room.owner.id || room.owner) === userIdStr;
   const isAlreadyMember = Array.isArray(room.members) && room.members.some(
-    (m) => String(m._id || m) === userIdStr
+    (m) => m && String(m._id || m.id || m) === userIdStr
   );
 
   // If not already owner and not already member, check private room permissions
@@ -286,7 +319,14 @@ async function joinRoom(roomIdOrId, userId, options = {}) {
         throw error;
       }
 
-      if (!room.inviteCode || !verifyInviteCode(room.inviteCode, inviteCode)) {
+      // Explicit token expiration check
+      if (room.inviteExpiresAt && new Date(room.inviteExpiresAt) < new Date()) {
+        const error = new Error('Invite code has expired');
+        error.status = 403;
+        throw error;
+      }
+
+      if (!room.inviteHash || !verifyInviteCode(room.inviteHash, inviteCode)) {
         const error = new Error('Invalid invite code for private room');
         error.status = 403;
         throw error;
@@ -360,12 +400,11 @@ async function getRoomInvite(roomIdOrId, userId) {
     throw error;
   }
 
-  if (!room.inviteCode) {
-    room.inviteCode = crypto.randomBytes(8).toString('hex');
-    await room.save();
-  }
-
-  return room.inviteCode;
+  const error = new Error(
+    'Plaintext invite tokens are hashed at rest and cannot be retrieved. Use POST /api/rooms/:roomId/invite/rotate to generate or rotate an invitation.'
+  );
+  error.status = 400;
+  throw error;
 }
 
 /**
@@ -417,8 +456,9 @@ async function rotateRoomInvite(roomIdOrId, userId) {
     throw error;
   }
 
-  const newCode = crypto.randomBytes(8).toString('hex');
-  room.inviteCode = newCode;
+  const newCode = crypto.randomBytes(16).toString('hex');
+  room.inviteHash = hashInviteCode(newCode);
+  room.inviteExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
   await room.save();
 
   return newCode;
@@ -432,6 +472,7 @@ module.exports = {
   getRoomInvite,
   rotateRoomInvite,
   verifyInviteCode,
+  hashInviteCode,
   sanitizeRoom,
   generateRoomId,
 };

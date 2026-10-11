@@ -7,8 +7,18 @@ import {
   User,
 } from '../types/auth';
 
-const API_BASE_URL =
-  (import.meta as any).env?.VITE_API_URL || 'http://localhost:5000';
+function resolveApiBaseUrl(): string {
+  try {
+    const metaEnv = (new Function('try { return import.meta.env; } catch (_) { return null; }'))();
+    if (metaEnv?.VITE_API_URL) return metaEnv.VITE_API_URL;
+  } catch (_) {}
+  if (typeof process !== 'undefined' && process.env?.VITE_API_URL) {
+    return process.env.VITE_API_URL;
+  }
+  return 'http://localhost:5000';
+}
+
+const API_BASE_URL = resolveApiBaseUrl();
 
 const TOKEN_KEY = 'token';
 

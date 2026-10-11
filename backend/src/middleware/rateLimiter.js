@@ -75,9 +75,17 @@ const executeLimiter = createRateLimiter({
   message: 'Execution rate limit exceeded. Please wait before submitting more code.',
 });
 
+// 10 attempts per IP per minute for room join / invite code attempts
+const joinRoomLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: (req, res) => resolveLimit('RATE_LIMIT_JOIN_ROOM_MAX', 10, 100),
+  message: 'Too many join room attempts. Please try again later.',
+});
+
 module.exports = {
   createRateLimiter,
   loginLimiter,
   registerLimiter,
   executeLimiter,
+  joinRoomLimiter,
 };

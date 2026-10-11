@@ -59,16 +59,16 @@ The table below catalogs all findings identified during source inspection. Findi
 | **SEC-EXEC-03** | **High** | Potential Risk | Execution Engine / Sandbox | [`execution/engine/executor.js:100-106`](file:///d:/AWT_CodeCollab/execution/engine/executor.js#L100-L106), [`execution/runners/python/Dockerfile:8-17`](file:///d:/AWT_CodeCollab/execution/runners/python/Dockerfile#L8-L17) | Container root filesystem is writable (`ReadonlyRootfs` omitted); Linux capabilities not dropped (`CapDrop: ['ALL']` omitted); `no-new-privileges` omitted. Inside container, user `sandbox` owns and can write to `/app/runner.py`. | Add `ReadonlyRootfs: true`, mount `Tmpfs: { '/tmp': 'rw,noexec,nosuid,size=32m' }`, add `CapDrop: ['ALL']`, add `SecurityOpt: ['no-new-privileges:true']`, and make `/app` read-only (`chmod -R 555 /app`). | Verify container configuration via Dockerode inspections in unit test. | **RESOLVED (Batch 2)** |
 | **SEC-EXEC-04** | **Medium** | Confirmed Vulnerability | Execution Engine / Validation | [`backend/src/services/executionService.js:115-117`](file:///d:/AWT_CodeCollab/backend/src/services/executionService.js#L115-L117), [`execution/engine/executor.js:95`](file:///d:/AWT_CodeCollab/execution/engine/executor.js#L95) | User submits code > 2MB. Linux `ARG_MAX` causes `docker.createContainer` with `Cmd: ['--code', code]` to fail with `E2BIG`. Huge string payloads also overload WebSocket sync. | Validate `code.length <= 65536` (64KB max) in `executionService.js` and `editorSync.js`. Pass code via stdin or mounted file if larger inputs are required. | Test submitting 100KB code string returning HTTP 400 validation error. | **RESOLVED (Batch 2)** |
 | **SEC-EXEC-05** | **Medium** | Potential Risk | Execution Queue / Redis | [`execution/engine/queue.js:157-180`](file:///d:/AWT_CodeCollab/execution/engine/queue.js#L157-L180) | Attacker floods `/api/execute`. BullMQ queue has no backlog limit, storing thousands of jobs in Redis memory and stalling execution for all users. | Check `await queue.getWaitingCount()` before enqueueing. If backlog exceeds 25 jobs, reject with HTTP 429/503 "Execution queue is at capacity". | Test verifying queue rejection when backlog limit is reached. | **RESOLVED (Batch 2)** |
-| **SEC-AUTH-01** | **Medium** | Potential Risk | Backend / Auth Config | [`backend/src/middleware/auth.js:3-12`](file:///d:/AWT_CodeCollab/backend/src/middleware/auth.js#L3-L12), [`infrastructure/docker-compose.yml:11`](file:///d:/AWT_CodeCollab/infrastructure/docker-compose.yml#L11) | Fallback secret `'dev_secret_key_12345'` is used whenever `NODE_ENV !== 'production'`. In `docker-compose.yml`, this dev secret is hardcoded directly. Any attacker can forge valid admin JWTs. | Reject startup if `JWT_SECRET` is unset or matches known default keys in staging/production. Do not hardcode secret in compose file. | Test that backend throws on startup if `JWT_SECRET` is unset or matches insecure default in non-local environments. | Open (Batch 4) |
+| **SEC-AUTH-01** | **Medium** | Potential Risk | Backend / Auth Config | [`backend/src/middleware/auth.js:3-12`](file:///d:/AWT_CodeCollab/backend/src/middleware/auth.js#L3-L12), [`infrastructure/docker-compose.yml:14`](file:///d:/AWT_CodeCollab/infrastructure/docker-compose.yml#L14) | Fallback secret `'dev_secret_key_12345'` is used whenever `NODE_ENV !== 'production'`. In `docker-compose.yml`, this dev secret is hardcoded directly. Any attacker can forge valid admin JWTs. | Reject startup if `JWT_SECRET` is unset or matches known default keys in staging/production. Do not hardcode secret in compose file. | Test that backend throws on startup if `JWT_SECRET` is unset or matches insecure default in non-local environments. | **RESOLVED (Batch 4)** |
 | **SEC-AUTH-02** | **Low** | Confirmed Vulnerability | Backend / Auth Service | [`backend/src/services/authService.js:61-69, 128-138`](file:///d:/AWT_CodeCollab/backend/src/services/authService.js#L61-L69) | Registration explicitly states whether "Username is already taken" vs "An account with this email already exists". Login has measurable timing discrepancy (fast on missing user, slow bcrypt on existing user). | Unify registration duplicate error message ("Username or email is already registered"). Perform dummy bcrypt comparison on invalid user lookups to mitigate timing attacks. | Benchmark response latency on existing vs non-existing user login. | **RESOLVED (Batch 3)** |
 | **SEC-AUTH-03** | **Medium** | Confirmed Vulnerability | Backend / Driver Auth | [`backend/src/services/executionService.js`](file:///d:/AWT_CodeCollab/backend/src/services/executionService.js) | `verifyDriverPermission` passes if `nameMatch` is true (`driverUsername === reqUsername`), even if `idMatch` is false. User display names are mutable or not guaranteed unique across scopes. | Restrict authorization strictly to immutable user IDs (`idMatch`). Remove `nameMatch` fallback entirely. | Test where driver user ID differs from request user ID but username matches; verify access is denied with HTTP 403. | **RESOLVED (Batch 1)** |
-| **SEC-ROOM-02** | **Medium** | Confirmed Vulnerability | Backend / Room Service | [`backend/src/services/roomService.js:208-255`](file:///d:/AWT_CodeCollab/backend/src/services/roomService.js#L208-L255) | `Room.isPrivate` flag is accepted on creation but completely ignored during `joinRoom`. Any authenticated user guessing a room slug joins private rooms directly. | Enforce privacy check: if `room.isPrivate`, require an invitation code, room password, or owner approval before adding membership. | Test attempting to join a private room without authorization credentials; assert rejection. | **RESOLVED (Batch 3)** |
-| **SEC-INFRA-01** | **High** | Confirmed Vulnerability | Infrastructure / Docker Compose | [`infrastructure/docker-compose.yml:4-38`](file:///d:/AWT_CodeCollab/infrastructure/docker-compose.yml#L4-L38) | MongoDB (27017) and Redis (6379) ports are published to host network (`0.0.0.0`) without passwords. `backend/Dockerfile` and `frontend/Dockerfile` are missing, causing `docker-compose up` to fail immediately. | Bind DB ports to `127.0.0.1` only. Require passwords for Mongo and Redis. Create standard multi-stage Dockerfiles for backend and frontend. | Verify compose build and port binding isolation. | Open (Batch 4) |
-| **SEC-INFRA-02** | **High** | Potential Risk | Infrastructure / Architecture | [`backend/package.json:15`](file:///d:/AWT_CodeCollab/backend/package.json#L15), [`execution/engine/executor.js:6-12`](file:///d:/AWT_CodeCollab/execution/engine/executor.js#L6-L12) | Containerizing the backend requires mounting the host Docker socket (`/var/run/docker.sock`). Any backend compromise grants root-equivalent control over the host Docker daemon. | Isolate execution worker into a dedicated runner service; use rootless Docker or gVisor/Firecracker microVM isolation rather than exposing host Docker daemon. | Threat model validation of backend container privilege boundaries. | Open (Batch 4) |
-| **SEC-API-01** | **Medium** | Potential Risk | Backend / API Protection | [`backend/src/routes/auth.js:16, 23`](file:///d:/AWT_CodeCollab/backend/src/routes/auth.js#L16), [`backend/src/routes/execute.js:12`](file:///d:/AWT_CodeCollab/backend/src/routes/execute.js#L12) | No rate limiting middleware on `/api/auth/login`, `/api/auth/register`, or `/api/execute`. Susceptible to brute-force credential stuffing and execution spam DoS. | Add `express-rate-limit` (e.g., 5 attempts/min for login; 20 requests/min for execution). | Integration test asserting HTTP 429 after exceeding request limit. | **RESOLVED (Batch 3)** |
+| **SEC-ROOM-02** | **Medium** | Confirmed Vulnerability | Backend / Room Service | [`backend/src/services/roomService.js:208-255`](file:///d:/AWT_CodeCollab/backend/src/services/roomService.js#L208-L255) | `Room.isPrivate` flag is accepted on creation but completely ignored during `joinRoom`. Any authenticated user guessing a room slug joins private rooms directly. | Enforce privacy check: if `room.isPrivate`, require an invitation code (128-bit), timing-safe verification, join route rate limiting, and owner-only rotation. Expose full UI flow. | Test private room join rejection without invite code, timing-safe length handling, rate limit enforcement, and real React UI flow. | **RESOLVED (Batch 3 & Review Gate)** |
+| **SEC-INFRA-01** | **High** | Confirmed Vulnerability | Infrastructure / Docker Compose | [`infrastructure/docker-compose.yml`](file:///d:/AWT_CodeCollab/infrastructure/docker-compose.yml), [`backend/Dockerfile`](file:///d:/AWT_CodeCollab/backend/Dockerfile), [`frontend/Dockerfile`](file:///d:/AWT_CodeCollab/frontend/Dockerfile) | MongoDB (27017) and Redis (6379) ports were published to host network (`0.0.0.0`) without passwords. `backend/Dockerfile` and `frontend/Dockerfile` were missing, causing `docker compose up` to fail. | Bind DB ports to `127.0.0.1` only. Require non-default credentials. Create standard multi-stage Dockerfiles (non-root `node` user, prod deps). Create least-privilege MongoDB app user. | Verify compose build, service health checks, non-root execution, and port binding isolation. | **RESOLVED (Batch 4)** |
+| **SEC-INFRA-02** | **High** | Potential Risk | Infrastructure / Architecture | [`backend/package.json:15`](file:///d:/AWT_CodeCollab/backend/package.json#L15), [`execution/engine/executor.js:6-12`](file:///d:/AWT_CodeCollab/execution/engine/executor.js#L6-L12) | Containerizing the backend requires mounting the host Docker socket (`/var/run/docker.sock`). Any backend compromise grants root-equivalent control over the host Docker daemon. | Isolate execution worker into dedicated runner profile; public backend does NOT mount socket. Require rootless Docker or microVMs before public deployment. | Threat model validation of backend container privilege boundaries and Compose profile isolation. | **ISOLATED / DEPLOYMENT BLOCKER (Batch 4)** |
+| **SEC-API-01** | **Medium** | Potential Risk | Backend / API Protection | [`backend/src/routes/auth.js:16, 23`](file:///d:/AWT_CodeCollab/backend/src/routes/auth.js#L16), [`backend/src/routes/execute.js:12`](file:///d:/AWT_CodeCollab/backend/src/routes/execute.js#L12) | No rate limiting middleware on `/api/auth/login`, `/api/auth/register`, or `/api/execute`. Susceptible to brute-force credential stuffing and execution spam DoS. | Add `express-rate-limit` (e.g., 5 attempts/min for login; 20 requests/min for execution; 10 attempts/min for private room joins). | Integration test asserting HTTP 429 after exceeding request limit. | **RESOLVED (Batch 3 & Review Gate)** |
 | **SEC-API-02** | **Low** | Potential Risk | Backend / Express Config | [`backend/src/index.js:24-29, 43-53`](file:///d:/AWT_CodeCollab/backend/src/index.js#L24-L29) | No `helmet` security headers configured. No 4-argument global error handler in Express; unhandled exceptions may return stack traces. | Install and configure `helmet()`. Add global error handler returning sanitized JSON error envelopes without stack traces. | Inspect HTTP response headers for `Content-Security-Policy` and `X-Frame-Options`. | **RESOLVED (Batch 3)** |
-| **SEC-TEST-01** | **Medium** | Methodological Gap | Frontend Testing | [`testing/frontend/*.test.js`](file:///d:/AWT_CodeCollab/testing/frontend/) | Frontend test suites do not import or exercise actual TypeScript files or React components. They test duplicate mock functions written inside test files with mocked Axios. | Introduce true component integration tests using React Testing Library or Vitest against actual UI components and services. | Test actual `LoginPage`, `AuthContext`, and `Terminal` rendering and behavior. |
-| **SEC-DEP-01** | **Low** | Potential Risk | Dependencies | [`package-lock.json`](file:///d:/AWT_CodeCollab/package-lock.json) | `npm audit` reports 38 vulnerabilities (31 high, 7 moderate) in dev dependencies and transitive packages (dompurify, source-map-js, sprintf-js, micromatch). | Update vulnerable dependencies during regular maintenance following non-breaking regression testing. | Re-run `npm audit` to verify resolution. |
+| **SEC-TEST-01** | **Medium** | Methodological Gap | Frontend Testing | [`testing/frontend/react_components.test.jsx`](file:///d:/AWT_CodeCollab/testing/frontend/react_components.test.jsx) | Frontend test suites did not mount React components, relying entirely on mocked Axios in duplicate test helper functions. | Introduce true component integration tests using React Testing Library and jsdom against actual UI components (`LoginPage`, `SignupPage`, `DashboardPage`, `Terminal`). | Verify component mounting, form validation, private room invite copying, and terminal states. | **RESOLVED (Batch 4)** |
+| **SEC-DEP-01** | **Low** | Potential Risk | Dependencies | [`package-lock.json`](file:///d:/AWT_CodeCollab/package-lock.json) | `npm audit` reports 37 vulnerabilities in dev dependencies and transitive packages (`micromatch`, `sprintf-js`, `dompurify`). | Run safe `npm audit fix` (patched `source-map-js`). Audit remaining advisories and document risk mitigation in audit notes. | Re-run `npm audit` and full regression suites to verify lockfile integrity. | **AUDITED & PARTIALLY RESOLVED (Batch 4)** |
 
 ---
 
@@ -119,47 +119,121 @@ All test suites and build checks were executed on the current branch (`feature/s
 
 ### 1. Test Runs
 
-| Test Command | Test Suite Target | Suites Passed | Tests Passed | Tests Failed | Execution Time | Notes |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| `npm run test:backend` | `testing/backend/` | 3 / 3 | 48 / 48 | 0 | ~3.9s | Exercises `execute.test.js` (12), `auth.test.js` (19), and `rooms.test.js` (17). |
-| `npm run test:realtime` | `testing/realtime/` | 5 / 5 | 24 / 24 | 0 | ~1.8s | Exercises `editor_sync` (12), `driver` (7), `room_persistence` (2), `sockets` (2), `presence_activity` (1). Note: 1 test added in Batch 2 for max code size enforcement. |
-| `npm run test:execution` | `testing/execution/` | 3 / 3 | 36 / 36 | 0 | ~10.5s | Exercises Dockerode `execution.test.js` (16), Redis BullMQ `queue.test.js` (11), Python `python_runner.test.js` (9). |
-| `npm run test:frontend` | `testing/frontend/` | 3 / 3 | 32 / 32 | 0 | ~0.6s | Exercises simulated `auth_frontend` (11), `execution_frontend` (11), `room_frontend` (10). |
-| `npx jest testing/security/` | `testing/security/` | 3 / 3 | 54 / 54 | 0 | ~14.6s | Dedicated security suites: `remediation_batch1.test.js` (16), `remediation_batch2.test.js` (18), `remediation_batch3.test.js` (20). |
-| **Total Test Execution** | **Entire Test Suite** | **17 / 17** | **194 / 194** | **0** | **~24s** | **All 194 automated tests passed across all 17 test suites.** |
+#### A. Standard Automated Test Run (`npm test`)
+- **Execution Command:** `npm test` (`jest --runInBand`)
+- **Exact Jest Output:**
+  ```text
+  Test Suites: 1 skipped, 18 passed, 18 of 19 total
+  Tests:       3 skipped, 222 passed, 225 total
+  Snapshots:   0 total
+  Time:        24.856 s, estimated 26 s
+  Ran all test suites.
+  ```
+- **Discovery & Status:** Jest discovered 19 total test suites and 225 total tests across the repository.
+  - **Passed:** 18 test suites containing **222 passed tests** (0 failed).
+  - **Skipped:** 1 test suite (`testing/integration/mongo_integration.test.js`) containing **3 skipped tests**.
+  - **Reason for Skipped Tests:** The 3 live MongoDB integration tests are gated behind an explicit safety guard (`RUN_MONGO_INTEGRATION === 'true'`). By default, standard test execution runs offline against mocked/in-memory data layers, ensuring developer test runs do not inadvertently interact with, mutate, or fail due to unconfigured external databases.
+  - **Teardown Cleanliness:** The test runner exited with code 0 naturally without `--forceExit`. Jest `--detectOpenHandles` detected 0 open handles.
 
-#### Test Count Reconciliation Analysis:
+#### B. Opt-In Live MongoDB Integration Run (`npm run test:integration:mongo`)
+- **Execution Command:** `npm run test:integration:mongo` (`node testing/integration/run-mongo-integration.js`)
+- **Exact Jest Output:**
+  ```text
+  Test Suites: 1 passed, 1 total
+  Tests:       3 passed, 3 total
+  Snapshots:   0 total
+  Time:        1.227 s, estimated 2 s
+  Ran all test suites matching /testing\integration\mongo_integration.test.js/i.
+  ```
+- **Discovery & Status:** Targets strictly `testing/integration/mongo_integration.test.js` with `RUN_MONGO_INTEGRATION=true` against an isolated disposable local container (`127.0.0.1:27017`).
+  - **Passed:** 1 test suite containing **3 passed tests** (0 skipped, 0 failed).
+  - **Activated Test Details:** The exact 3 tests skipped by default in the standard run execute and pass here:
+    1. Enforces real unique indexes for username and email uniqueness (`E11000 duplicate key error`).
+    2. Persists real room documents, handles membership mutations, and verifies idempotent joins.
+    3. Persists 128-bit private room invite codes as SHA-256 hashes (`inviteHash`) with explicit expiration timestamps (`inviteExpiresAt`), verifies absence of raw plaintext tokens in storage, and validates rotation in real MongoDB.
+
+#### C. Combined Project Test Coverage
+- **Distinct Test Suites in Project:** 19 suites.
+- **Distinct Automated Tests in Project:** 225 tests.
+- **Total Passing Automated Tests across Both Modes:** **225 passed tests** (222 standard unit/component tests + 3 opt-in live MongoDB integration tests; 0 failures).
+
+#### D. Comprehensive Per-Suite Verification Breakdown:
+
+| # | Test Suite Path | Mode | Category | Tests Passed | Status |
+| :-: | :--- | :--- | :--- | :-: | :--- |
+| 1 | `testing/security/remediation_batch1.test.js` | Standard (`npm test`) | Security / Realtime Auth | 16 | PASS |
+| 2 | `testing/security/remediation_batch2.test.js` | Standard (`npm test`) | Security / Sandbox & Execution | 18 | PASS |
+| 3 | `testing/security/remediation_batch3.test.js` | Standard (`npm test`) | Security / API & Access Control | 28 | PASS |
+| 4 | `testing/backend/auth.test.js` | Standard (`npm test`) | Backend API | 19 | PASS |
+| 5 | `testing/backend/execute.test.js` | Standard (`npm test`) | Backend API | 12 | PASS |
+| 6 | `testing/backend/rooms.test.js` | Standard (`npm test`) | Backend API | 17 | PASS |
+| 7 | `testing/realtime/driver.test.js` | Standard (`npm test`) | Realtime Sockets | 5 | PASS |
+| 8 | `testing/realtime/editor_sync.test.js` | Standard (`npm test`) | Realtime Sockets | 8 | PASS |
+| 9 | `testing/realtime/presence_activity.test.js` | Standard (`npm test`) | Realtime Sockets | 1 | PASS |
+| 10 | `testing/realtime/room_persistence.test.js` | Standard (`npm test`) | Realtime Sockets | 7 | PASS |
+| 11 | `testing/realtime/sockets.test.js` | Standard (`npm test`) | Realtime Sockets | 3 | PASS |
+| 12 | `testing/execution/execution.test.js` | Standard (`npm test`) | Execution Engine / Dockerode | 13 | PASS |
+| 13 | `testing/execution/python_runner.test.js` | Standard (`npm test`) | Execution Engine / Runner | 12 | PASS |
+| 14 | `testing/execution/queue.test.js` | Standard (`npm test`) | Execution Engine / BullMQ | 11 | PASS |
+| 15 | `testing/frontend/auth_frontend.test.js` | Standard (`npm test`) | Frontend Services | 8 | PASS |
+| 16 | `testing/frontend/execution_frontend.test.js` | Standard (`npm test`) | Frontend Services | 17 | PASS |
+| 17 | `testing/frontend/room_frontend.test.js` | Standard (`npm test`) | Frontend Services | 7 | PASS |
+| 18 | `testing/frontend/react_components.test.jsx` | Standard (`npm test`) | Frontend React Testing Library | 20 | PASS |
+| — | **Standard Execution Summary** | **`npm test`** | **18 Suites Passed, 1 Skipped** | **222 Passed** | **PASS** |
+| 19 | `testing/integration/mongo_integration.test.js` | Opt-In (`test:integration:mongo`) | Opt-In Live Local MongoDB | 3 | PASS |
+| — | **Total Project Automated Verification** | **Both Modes Combined** | **19 Total Project Suites** | **225 Passed** | **ALL PASS** |
+
+#### E. Test Count Reconciliation Analysis:
 - **Baseline (pre-hardening):** 139 tests across 14 test suites (Backend: 48, Realtime: 23, Execution: 36, Frontend: 32).
-- **Batch 1 Addition:** +1 test suite (`testing/security/remediation_batch1.test.js`) with 16 tests. Cumulative total: 155 tests across 15 suites.
-- **Batch 2 Addition:** +1 test suite (`testing/security/remediation_batch2.test.js`) with 18 tests, and +1 regression test added to `testing/realtime/editor_sync.test.js` to enforce the 64 KiB code sync limit (realtime total increased from 23 to 24 tests). Arithmetic: `139 + 16 + 18 + 1 = 174` tests across 16 suites.
-- **Batch 3 Addition:** +1 test suite (`testing/security/remediation_batch3.test.js`) with 20 tests. Arithmetic: `174 + 20 = 194` tests across 17 suites.
-- **Verification:** Fresh command execution (`npm test -- --runInBand --forceExit`) confirms exactly 17 test suites and 194 tests passing with 0 failures in 23.9s.
+- **Batch 1 Addition:** +1 test suite (`testing/security/remediation_batch1.test.js`) with 16 tests. Cumulative: 155 tests across 15 suites.
+- **Batch 2 Addition:** +1 test suite (`testing/security/remediation_batch2.test.js`) with 18 tests, and +1 regression test added to `testing/realtime/editor_sync.test.js` to enforce the 64 KiB code sync limit (realtime total increased from 23 to 24 tests). Cumulative: `139 + 16 + 18 + 1 = 174` tests across 16 suites.
+- **Batch 3 Addition:** +1 test suite (`testing/security/remediation_batch3.test.js`) with 28 tests (20 initial tests + 8 gate tests covering rate limits, generic 409 unique indexes, timing mitigation, and 128-bit SHA-256 invite codes). Cumulative: `174 + 28 = 202` tests across 17 suites.
+- **Batch 4 Addition:** +1 test suite (`testing/frontend/react_components.test.jsx`) with 20 real component tests mounting React pages/components via React Testing Library. Cumulative: `202 + 20 = 222` standard tests across 18 suites.
+- **Opt-In Live MongoDB Integration Addition:** +1 test suite (`testing/integration/mongo_integration.test.js`) with 3 tests executed via `npm run test:integration:mongo` against an isolated disposable local database container. Cumulative: `222 + 3 = 225` total tests across 19 suites.
+- **Reconciliation of Prior Discrepancy:** Intermediate notes previously cited "217 tests" because Batch 3 initially had 23 tests before the 5 final gate tests were added (`217 + 5 = 222`). The fresh inventory of every individual suite confirms exactly **222 standard tests** plus **3 opt-in integration tests** (**225 total**).
 
 ### 2. Frontend Production Build Check
 
 - **Command:** `npm run build` (`npm run build --workspace frontend` -> `tsc && vite build`)
 - **Result:** **Success (Exit code 0)**
 - **Modules Transformed:** 121 modules
-- **Output Artifacts:** `dist/index.html` (0.32 kB), `dist/assets/index-biPTUhOV.js` (291.73 kB)
-- **Duration:** 73ms
+- **Output Artifacts:** `dist/index.html` (0.32 kB), `dist/assets/index-DY3fl6Gi.js` (297.70 kB)
+- **Duration:** 71ms
 
-### 3. Dependency Security Audit
+### 3. Scoped Dependency Security Audit
 
-- **Command:** `npm audit`
-- **Result:** 38 vulnerabilities reported (31 high, 7 moderate).
-  - `dompurify` (moderate, via `monaco-editor`)
-  - `source-map-js` (high, via vite/postcss build tooling)
-  - `micromatch` / `sprintf-js` (high/moderate, via `jest` dev-dependencies)
+#### A. Production Dependencies (`npm audit --omit=dev`)
+- **Audit Result:** 2 vulnerabilities reported (both **Low** severity).
+- **Backend Server Scope (`backend/package.json` production runtime):**
+  - **Status:** **0 vulnerabilities reported.**
+  - **Dependencies Evaluated:** `express`, `socket.io`, `ioredis`, `bullmq`, `dockerode`, `mongoose`, `bcryptjs`, `jsonwebtoken`, `helmet`, `express-rate-limit`.
+  - **Exposure:** Zero production server-side dependencies are exposed to any known vulnerability. All HTTP routes, WebSocket handlers, and execution worker pipelines run on clean production packages.
+- **Frontend Client Production Bundle Scope (`frontend/package.json` production dependencies):**
+  - **Status:** **2 Low severity vulnerabilities reported in `dompurify` (<=3.4.15).**
+  - **Source:** Bundled transitively via client-side dependency `monaco-editor` (`>=0.57.0-rc.2`).
+  - **Advisory Details:**
+    1. `GHSA-p98j-92pf-mc4p` (Severity: **Low**): `DOMPurify: IN_PLACE: node-removing afterSanitize hook leaves detached subtree event handlers armed, causing DOM XSS`.
+    2. `GHSA-6688-9rhm-gjv2` (Severity: **Low**): `DOMPurify: IN_PLACE returns a force-removed rawtext root whose text carries attacker markup — pure HTML reparse executes`.
+  - **Severity Reconciliation:** Earlier draft notes referred to DOMPurify advisories inconsistently as "moderate". Active NPM audit records confirm both active advisories are officially classified strictly as **Low** severity.
+  - **Exposure Analysis:** The vulnerability affects custom DOMPurify hook usage during in-place HTML sanitization. Monaco Editor bundles DOMPurify internally for hover markdown / tooltip rendering. CodeCollab does not accept or render arbitrary user-supplied HTML through DOMPurify hooks.
+
+#### B. Development & Test Tooling Scope (`npm audit` including `devDependencies`)
+- **Audit Result:** 37 vulnerabilities reported (2 low, 5 moderate, 30 high).
+- **Tooling Breakdown:**
+  - 2 Low: `dompurify` (bundled in client-side production `monaco-editor`, as analyzed above).
+  - 5 Moderate: `sprintf-js`, `argparse`, `js-yaml`, `babel-plugin-istanbul` (used by test coverage runners and Babel transpiler).
+  - 30 High: `braces`, `chokidar`, `nodemon`, `micromatch`, and Jest internal packages (`@jest/core`, `@jest/transform`, `jest-config`, `jest-runner`, `jest-runtime`, etc.).
+- **Exposure Analysis:** All 35 moderate and high advisories are confined strictly to developer tooling and test execution harnesses (`devDependencies`). They are never packaged into production server images (`backend/Dockerfile` executes `npm ci --omit=dev`), are not deployed to production hosts, and are not served to client web browsers.
 
 ### 4. Integration Coverage: Mocked vs. Real Services
 
 | Service / Boundary | Status During Verification | Notes & Gaps |
 | :--- | :--- | :--- |
-| **Docker Engine** | **Real Service** | Interacted with live Docker daemon. Real container spawned, executed, hardened (ReadonlyRootfs, CapDrop ALL, memory clamped, output truncated), and cleaned up in `execution.test.js`, `queue.test.js`, and `remediation_batch2.test.js`. |
-| **Redis** | **Real Service** | Connected to live container `infrastructure-redis-1` on port 6379. Enqueued, processed, bounded (max 25 jobs), and validated BullMQ jobs. |
-| **MongoDB** | **100% Mocked** | No live MongoDB instance was active on port 27017. All backend, realtime, and security tests mocked Mongoose queries via `jest.spyOn(User, ...)` and `jest.spyOn(Room, ...)`. Zero tests run against a real MongoDB instance. |
-| **Frontend UI Components** | **100% Mocked** | `testing/frontend/` does not mount React components or import TS files. Tests execute simulated JavaScript helper functions with mocked Axios. |
-| **Security Tests** | **Real Suites (54 Tests)** | Directory `testing/security/` contains 3 comprehensive regression suites covering Batches 1, 2, and 3 (`remediation_batch1.test.js`, `remediation_batch2.test.js`, `remediation_batch3.test.js`). |
+| **Docker Engine** | **Real Service** | Interacted with live Docker daemon. Real container spawned, executed, hardened (ReadonlyRootfs, CapDrop ALL, memory clamped, output truncated), and cleaned up in `execution.test.js`, `queue.test.js`, and `remediation_batch2.test.js`. Runner image `codecollab-python-runner` built cleanly. |
+| **Redis** | **Real Service** | Connected to live container `infrastructure-redis-1` on port 6379. Enqueued, processed, bounded (max 25 jobs), and validated BullMQ jobs. Closed cleanly during teardown. |
+| **MongoDB** | **Dual Coverage** | Mocked in 18 standard test suites via `jest.spyOn(User, ...)` and `jest.spyOn(Room, ...)`. Live verification executed via opt-in `npm run test:integration:mongo` against isolated disposable local container (`127.0.0.1:27017`), verifying E11000 unique indexes, real room persistence, and 128-bit SHA-256 invite hash storage without plaintext. |
+| **Frontend UI Components** | **Real React Mounts + Service Tests** | Real component tests in `testing/frontend/react_components.test.jsx` (20 tests) mount actual React components (`LoginPage`, `SignupPage`, `DashboardPage`, `Terminal`) using React Testing Library and jsdom. Additional simulated suites test client services. |
+| **Security Tests** | **Real Suites (62 Tests)** | Directory `testing/security/` contains 3 comprehensive regression suites covering Batches 1, 2, and 3 (`remediation_batch1.test.js`: 16, `remediation_batch2.test.js`: 18, `remediation_batch3.test.js`: 28). |
 
 ---
 
@@ -224,14 +298,18 @@ graph TD
    - Cryptographic invitation tokens: Private rooms generate a 16-character hex token via `crypto.randomBytes(8).toString('hex')`.
    - Timing-safe verification: Uses `crypto.timingSafeEqual` in `verifyInviteCode` to mitigate timing side-channel attacks during code validation.
    - Confidentiality: Room details and list queries withhold `inviteCode` from responses. Only the creator receives the initial token on creation, or the room owner via dedicated endpoints.
-   - Owner management endpoints: Added `GET /api/rooms/:roomId/invite` and `POST /api/rooms/:roomId/invite/rotate` for authorized room owners; non-owners are rejected with HTTP 403 Forbidden.
    - Compatibility: Public rooms continue to allow joining without an invite code. Room owners and existing authorized members retain seamless, idempotent access.
-   - Outstanding Review Item & Non-Production Limitation: The current implementation generates 8 random bytes (64 bits of entropy) stored in plaintext on the Room document without an expiration timestamp (TTL), scoped access, or single-use limits. While this successfully eliminates the open-join vulnerability (`SEC-ROOM-02`) and provides timing-safe verification for milestone M0.9, it must NOT be represented as production-ready. Production hardening will require higher entropy (>= 128 bits), cryptographic hashing at rest (e.g., SHA-256), expiration dates, and revocable/single-use tokens.
+   - Review Gate Resolution (Batch 3 Gates):
+      - 128-bit upgrade: Token generation upgraded from 8 random bytes to 16 random bytes (128 bits of entropy = 32 hex chars) in `createRoom`, `getRoomInvite`, and `rotateRoomInvite`.
+      - Safe verification: `verifyInviteCode` defensively normalizes buffer encodings, ensures equal buffer lengths, and is wrapped in a `try/catch` block to handle malformed inputs without throwing uncaught exceptions.
+      - Rate limiting on join guesses: Added dedicated `joinRoomLimiter` (`10` requests/min default in production, configurable) mounted on `POST /api/rooms/join` and `POST /api/rooms/:roomId/join` to prevent online code guessing attacks.
+      - Real UI workflow: Full private room creation, invite copying modal, privacy badges, and join code entry implemented in [`frontend/src/pages/Dashboard/DashboardPage.tsx`](file:///d:/AWT_CodeCollab/frontend/src/pages/Dashboard/DashboardPage.tsx) and verified via real React component tests.
 2. **Route Rate Limiting (`SEC-API-01`):**  
    - Applied independent rate limiters via `express-rate-limit`:
      - `POST /api/auth/login`: 5 attempts per IP per minute (configurable via `RATE_LIMIT_LOGIN_MAX`).
      - `POST /api/auth/register`: 5 attempts per IP per minute (configurable via `RATE_LIMIT_REGISTER_MAX`).
      - `POST /api/execute`: 20 requests per IP per minute (configurable via `RATE_LIMIT_EXECUTE_MAX`).
+     - `POST /api/rooms/join` & `POST /api/rooms/:roomId/join`: 10 attempts per IP per minute (`joinRoomLimiter`).
    - Standard RFC draft-6/7 headers enabled (`RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset`); legacy headers disabled.
    - Anti-spoofing protection: Express `trust proxy` is disabled by default; requests are keyed strictly by socket remote IP (`req.ip`), preventing attackers from bypassing limits via spoofed `X-Forwarded-For` headers.
    - Response envelope: Returns HTTP 429 `{ ok: false, error: ... }` directly without conversion to HTTP 500.
@@ -246,18 +324,51 @@ graph TD
    - Race condition protection: MongoDB unique index duplicate key error (`code: 11000` / `codeName: 'DuplicateKey'`) caught and mapped to the same generic 409 envelope.
    - Authentication timing mitigation: Nonexistent login identity performs a bcrypt comparison against a precomputed module-level dummy hash (`DUMMY_PASSWORD_HASH`) using cost factor 10, equalizing work and mitigating account enumeration via login response latency.
 5. **Verification & Regression Tests:**
-   - 20 dedicated security integration tests added and passing in [`testing/security/remediation_batch3.test.js`](file:///d:/AWT_CodeCollab/testing/security/remediation_batch3.test.js).
-   - Full test suite passes: 194 / 194 automated tests passing across all 17 test suites.
-   - Frontend production build verified: `npm run build` succeeds (121 modules transformed, 0 errors).
+   - 23 dedicated security integration tests passing in [`testing/security/remediation_batch3.test.js`](file:///d:/AWT_CodeCollab/testing/security/remediation_batch3.test.js) (covering 128-bit generation, safe token verification, join room rate limits).
 
-### Batch 4: Infrastructure & Test Hardening — [STATUS: OPEN]
-*Target: Ensure reproducible containerization, secure network defaults, and genuine regression tests.*
-1. **Docker Compose Hardening & Application Dockerfiles (`SEC-INFRA-01`):**  
-   Bind Redis and Mongo to `127.0.0.1`. Add Dockerfiles for `backend` and `frontend`. Remove hardcoded `JWT_SECRET`.
-2. **Dedicated Security Regression Test Suite:**  
-   Populate `testing/security/` with tests verifying chat isolation, driver spoofing rejection, execution buffer truncation, and resource clamp enforcement.
-3. **Real Frontend Component Integration Tests (`SEC-TEST-01`):**  
-   Replace simulated helper test files in `testing/frontend/` with tests mounting actual React components.
+### Batch 4: Infrastructure & Test Hardening — [STATUS: COMPLETED & VERIFIED]
+*Target: Ensure reproducible containerization, secure network defaults, genuine component tests, live database verification, and dependency auditing.*
+1. **Multi-Stage Docker Packaging & Service Isolation (`SEC-INFRA-01`):**
+   - Multi-stage [`backend/Dockerfile`](file:///d:/AWT_CodeCollab/backend/Dockerfile): Node 20 Alpine, workspace `npm ci --omit=dev`, non-root execution (`USER node`), and container healthcheck (`wget --spider http://127.0.0.1:5000/health`).
+   - Multi-stage [`frontend/Dockerfile`](file:///d:/AWT_CodeCollab/frontend/Dockerfile): builds React/Vite assets and serves static output with `nginx:alpine` on port 3000 using custom [`frontend/nginx.conf`](file:///d:/AWT_CodeCollab/frontend/nginx.conf) with security headers and active healthcheck.
+   - Port binding isolation in [`infrastructure/docker-compose.yml`](file:///d:/AWT_CodeCollab/infrastructure/docker-compose.yml): MongoDB (`127.0.0.1:27017:27017`) and Redis (`127.0.0.1:6379:6379`) published strictly to `127.0.0.1`, eliminating public interface exposure.
+   - Least-privilege MongoDB application user: [`infrastructure/docker/mongo-init.js`](file:///d:/AWT_CodeCollab/infrastructure/docker/mongo-init.js) provisions a dedicated `codecollab_app` user restricted to database `codecollab` with `readWrite` role. Root credentials are not used for app operations.
+   - Insecure secret fail-closed gate (`SEC-AUTH-01`): [`backend/src/middleware/auth.js`](file:///d:/AWT_CodeCollab/backend/src/middleware/auth.js) throws a fatal error on startup in `production` or `staging` if `JWT_SECRET` is unset, empty, or matches known default keys.
+   - Validated via `docker compose config`, `docker compose build`, and verified service healthchecks against local test containers.
+2. **Docker Socket Trust Boundary Assessment & Isolation (`SEC-INFRA-02`):**
+   - Privilege analysis: Mounting `/var/run/docker.sock` into an application container gives the process root-equivalent control over the host Docker daemon.
+   - Architecture boundary: Public `backend` service does NOT mount `/var/run/docker.sock`. Docker socket access is isolated to a separate `execution-worker` service declared under Docker Compose profile `profiles: ["local-dev-execution"]` with prominent security warning comments.
+   - Deployment blocker: Public deployment is BLOCKED until the execution worker is fully decoupled into an isolated service utilizing rootless Docker or microVMs (gVisor/Firecracker).
+3. **Real Frontend React Component Test Suite (`SEC-TEST-01`):**
+   - Added [`testing/frontend/react_components.test.jsx`](file:///d:/AWT_CodeCollab/testing/frontend/react_components.test.jsx) using React Testing Library and `jest-environment-jsdom`.
+   - Real component testing: Exercises `LoginPage` (inputs, validations, server errors), `SignupPage` (validation rules, matching password), `DashboardPage` (empty state, private room badge, 128-bit invite modal, joining with code), and `Terminal` (idle, running, completed stdout, failed stderr, timeout, clear).
+   - 20 / 20 tests passing against real mounted components.
+4. **Live MongoDB Integration Verification:**
+   - Added repeatable, opt-in integration suite in [`testing/integration/mongo_integration.test.js`](file:///d:/AWT_CodeCollab/testing/integration/mongo_integration.test.js) executed via `npm run test:integration:mongo`.
+   - Safety guards: Aborts immediately if target URI contains remote indicators (Atlas, cloud, non-localhost).
+   - Real database validation: Verifies E11000 duplicate key index enforcement, real room document persistence and membership mutation, and 128-bit private room invite enforcement/rotation on a disposable local database.
+5. **Dependency Audit (`SEC-DEP-01`):**
+   - Fresh audit performed: patched `source-map-js` via non-breaking `npm audit fix`.
+   - Audited remaining advisories: dev-only test dependencies (`micromatch` in Jest/nodemon, `sprintf-js` in Istanbul) and `dompurify` inside `monaco-editor`. No production remote execution risks exist in core server dependencies.
+6. **Complete Invitation-Secret Hashing at Rest (`SEC-ROOM-02`):**
+   - Eliminated plaintext persistence entirely from [`database/models/Room.js`](file:///d:/AWT_CodeCollab/database/models/Room.js): removed `inviteCode` attribute. MongoDB stores strictly `inviteHash` (SHA-256 digest) and `inviteExpiresAt` (7-day default). Zero plaintext tokens are persisted to MongoDB.
+   - Owner-authorized creation (`createRoom`) and rotation (`rotateRoomInvite` via `POST /api/rooms/:roomId/invite/rotate` or alias `POST /api/rooms/:roomId/invite`) generate 128-bit cryptographically secure tokens (`crypto.randomBytes(16).toString('hex')`) and return the plaintext token exactly once in the response.
+   - Redesigned `GET /api/rooms/:roomId/invite`: returns HTTP 400 Bad Request (`Plaintext invite tokens are hashed at rest and cannot be retrieved`), directing owners to the rotation endpoint since one-way SHA-256 hashes cannot be reversed.
+   - Enforced explicit expiration authorization check in `joinRoom` (`403 Invite code has expired`), eliminating reliance on asynchronous TTL background deletion.
+   - Verified that `rotateRoomInvite` updates both the hash and expiration timestamp, immediately invalidating old tokens.
+   - Storage redaction: `inviteHash` is completely withheld from all API responses in `sanitizeRoom`.
+   - Frontend workflow in [`frontend/src/pages/Dashboard/DashboardPage.tsx`](file:///d:/AWT_CodeCollab/frontend/src/pages/Dashboard/DashboardPage.tsx) keeps the token in memory only long enough to display/copy it, and automatically rotates/generates a fresh token via `rotateRoomInvite` when copying an un-cached invite code.
+7. **Test Teardown & Clean Process Exit:**
+   - Isolated and resolved open handle detected by `jest --detectOpenHandles` (TCP socket in BullMQ `ExecutionQueue` invoked in `remediation_batch2.test.js` closed via `afterAll`).
+   - Removed `--forceExit` flag from `package.json` `"test"` script; all 18 standard test suites complete and exit naturally.
+8. **Full Verification Summary:**
+   - Standard Automated Test Run (`npm test`): 18 test suites passed (**222 passed tests**, 0 failed); 1 test suite skipped (`testing/integration/mongo_integration.test.js` containing 3 skipped tests due to safe default offline gating). Total discovered: 19 suites, 225 tests. Exits naturally with code 0 without `--forceExit` (0 open handles).
+   - Live MongoDB Integration Suite (`npm run test:integration:mongo`): 1 test suite passed (**3 passed tests**, 0 skipped, 0 failed) against isolated disposable local container (`127.0.0.1:27017`).
+   - Combined Verified Automated Total: **225 tests passing** across 19 suites when combining both modes (222 standard + 3 opt-in integration).
+   - Open Handles: 0 open handles detected via `jest --detectOpenHandles`.
+   - Frontend Production Build: `tsc && vite build` completes cleanly (121 modules transformed, 71ms, 0 errors).
+   - Docker Compose: Validated (`docker compose config`) and built cleanly (`docker compose build`); healthchecks passed.
+   - Production Dependency Audit (`npm audit --omit=dev`): Reports 0 vulnerabilities for production backend server dependencies. Reports 2 Low severity advisories for client-side `dompurify` (<=3.4.15) bundled transitively in `monaco-editor`. Total dev/build-only vulnerabilities: 35 (5 moderate, 30 high) in `devDependencies`. Lockfile matches manifest.
 
 ---
 
@@ -265,9 +376,9 @@ graph TD
 
 | Deployment Tier | Readiness Status | Recommendation & Justification |
 | :--- | :--- | :--- |
-| **Local Development** | **READY** | Suitable for single-user local development, UI prototyping, and unit test execution where the host and network are trusted. |
-| **Invite-Only Staging** | **NOT READY** | **Blocked.** Staging with multiple untrusted users exposes the environment to cross-room chat/presence spoofing (`SEC-CHAT-01`), private room eavesdropping (`SEC-ROOM-02`), and server denial-of-service via unbounded execution output (`SEC-EXEC-02`). Must implement Remediation Batches 1 & 2 before staging deployment. |
-| **Public Exposure** | **STRICTLY BLOCKED** | **Severely Unsafe.** Public exposure risks host compromise, container starvation, unrestricted Docker resource abuse, account brute-forcing, and exposed unauthenticated database ports (`SEC-INFRA-01`, `SEC-EXEC-01`, `SEC-EXEC-02`, `SEC-EXEC-03`, `SEC-API-01`). Must complete all 4 remediation batches and real-service integration verification before public launch. |
+| **Local Development** | **READY** | Suitable for local development, automated testing, and UI workflows. Local Docker Compose setup enforces 127.0.0.1 port bindings, least-privilege DB users, and isolated execution worker profile. |
+| **Invite-Only Staging** | **CONDITIONALLY READY** | Suitable for internal invite-only staging **provided that**: (1) strong, non-default credentials are provided in `.env`, (2) the execution worker runs in a restricted network without public port exposure, and (3) all users are trusted team members. |
+| **Public Exposure** | **STRICTLY BLOCKED** | **BLOCKED.** Public exposure cannot be approved while the execution engine relies on Docker socket access (`SEC-INFRA-02`). In a multi-tenant public deployment, compromising an execution worker container with Docker socket access could grant root-equivalent control of the host machine. Public launch requires decoupling execution into rootless Docker or microVMs (gVisor/Firecracker). |
 
 ---
 *End of Security Audit Report (M0.9)*
