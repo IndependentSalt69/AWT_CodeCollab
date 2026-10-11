@@ -17,12 +17,53 @@ function generateRoomId(name) {
 }
 
 /**
- * Normalizes a Room document into a safe API response payload.
+ * Hashes an invite code token with SHA-256 for secure storage and comparison.
  */
-function sanitizeRoom(room) {
+function hashInviteCode(code) {
+  if (typeof code !== 'string') return null;
+  return crypto.createHash('sha256').update(code.trim().toLowerCase()).digest('hex');
+}
+
+/**
+ * Timing-safe string comparison to verify a provided invite token against its SHA-256 hash at rest.
+ * Prevents side-channel timing attacks on invite code verification.
+ */
+function verifyInviteCode(storedHash, providedCode) {
+  try {
+    if (typeof storedHash !== 'string' || typeof providedCode !== 'string') {
+      return false;
+    }
+    const cleanStored = storedHash.trim();
+    const cleanProvided = providedCode.trim();
+    if (!cleanStored || !cleanProvided) {
+      return false;
+    }
+
+    // Must be a 64-character hex string (SHA-256 hash)
+    if (!/^[0-9a-f]{64}$/i.test(cleanStored)) {
+      return false;
+    }
+
+    const candidateHash = hashInviteCode(cleanProvided);
+    const hashBuf = Buffer.from(cleanStored.toLowerCase(), 'utf8');
+    const candBuf = Buffer.from(candidateHash, 'utf8');
+    if (hashBuf.length !== candBuf.length || hashBuf.length === 0) {
+      return false;
+    }
+    return crypto.timingSafeEqual(hashBuf, candBuf);
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
+ * Normalizes a Room document into a safe API response payload.
+ * By default, invite codes for private rooms are withheld to prevent leaking secrets.
+ */
+function sanitizeRoom(room, options = {}) {
   if (!room) return null;
   const doc = typeof room.toObject === 'function' ? room.toObject() : room;
-  return {
+  const sanitized = {
     id: doc._id?.toString() || doc.id,
     _id: doc._id?.toString() || doc.id,
     roomId: doc.roomId,
@@ -41,20 +82,33 @@ function sanitizeRoom(room) {
         : doc.owner.toString()
       : null,
     members: Array.isArray(doc.members)
-      ? doc.members.map((m) =>
-          typeof m === 'object'
-            ? {
-                id: m._id?.toString() || m.id,
-                _id: m._id?.toString() || m.id,
-                username: m.username,
-                email: m.email,
-              }
-            : m.toString()
-        )
+      ? doc.members
+          .filter(Boolean)
+          .map((m) =>
+            typeof m === 'object'
+              ? {
+                  id: m._id?.toString() || m.id,
+                  _id: m._id?.toString() || m.id,
+                  username: m.username,
+                  email: m.email,
+                }
+              : m.toString()
+          )
       : [],
     createdAt: doc.createdAt,
     updatedAt: doc.updatedAt,
   };
+
+  if (doc.inviteExpiresAt) {
+    sanitized.inviteExpiresAt = doc.inviteExpiresAt;
+  }
+
+  // Plaintext token is only returned once when explicitly supplied (e.g. upon room creation)
+  if (options.rawToken) {
+    sanitized.inviteCode = options.rawToken;
+  }
+
+  return sanitized;
 }
 
 /**
@@ -96,13 +150,20 @@ async function createRoom({ name, language, isPrivate }, userId) {
   }
 
   try {
+    const isRoomPrivate = Boolean(isPrivate);
+    const rawToken = isRoomPrivate ? crypto.randomBytes(16).toString('hex') : null;
+    const inviteHash = rawToken ? hashInviteCode(rawToken) : null;
+    const inviteExpiresAt = rawToken ? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) : null;
+
     const room = new Room({
       name: trimmedName,
       roomId: uniqueRoomId,
       owner: userId,
       members: [userId], // Creator automatically becomes a member!
       language: effectiveLanguage,
-      isPrivate: Boolean(isPrivate),
+      isPrivate: isRoomPrivate,
+      inviteHash,
+      inviteExpiresAt,
     });
 
     await room.save();
@@ -112,7 +173,7 @@ async function createRoom({ name, language, isPrivate }, userId) {
       await room.populate('members', 'username email');
     }
 
-    return sanitizeRoom(room);
+    return sanitizeRoom(room, { rawToken });
   } catch (err) {
     if (err.status) throw err;
     const dbError = new Error(err.message || 'Failed to create room in database');
@@ -188,9 +249,9 @@ async function getRoomDetails(roomIdOrId, userId) {
   }
 
   const userIdStr = String(userId);
-  const isOwner = room.owner && String(room.owner._id || room.owner) === userIdStr;
+  const isOwner = room.owner && String(room.owner._id || room.owner.id || room.owner) === userIdStr;
   const isMember = Array.isArray(room.members) && room.members.some(
-    (m) => String(m._id || m) === userIdStr
+    (m) => m && String(m._id || m.id || m) === userIdStr
   );
 
   if (!isOwner && !isMember) {
@@ -204,8 +265,9 @@ async function getRoomDetails(roomIdOrId, userId) {
 
 /**
  * Joins a room using its roomId or join code. Membership addition is idempotent.
+ * If the room is private, non-members must provide a valid inviteCode.
  */
-async function joinRoom(roomIdOrId, userId) {
+async function joinRoom(roomIdOrId, userId, options = {}) {
   if (!userId) {
     const error = new Error('Authentication required');
     error.status = 401;
@@ -239,11 +301,38 @@ async function joinRoom(roomIdOrId, userId) {
   }
 
   const userIdStr = String(userId);
+  const isOwner = room.owner && String(room.owner._id || room.owner.id || room.owner) === userIdStr;
   const isAlreadyMember = Array.isArray(room.members) && room.members.some(
-    (m) => String(m._id || m) === userIdStr
+    (m) => m && String(m._id || m.id || m) === userIdStr
   );
 
-  if (!isAlreadyMember) {
+  // If not already owner and not already member, check private room permissions
+  if (!isAlreadyMember && !isOwner) {
+    if (room.isPrivate) {
+      const inviteCode = typeof options === 'string'
+        ? options
+        : options?.inviteCode || options?.code;
+
+      if (!inviteCode || typeof inviteCode !== 'string' || !inviteCode.trim()) {
+        const error = new Error('Invite code is required to join a private room');
+        error.status = 403;
+        throw error;
+      }
+
+      // Explicit token expiration check
+      if (room.inviteExpiresAt && new Date(room.inviteExpiresAt) < new Date()) {
+        const error = new Error('Invite code has expired');
+        error.status = 403;
+        throw error;
+      }
+
+      if (!room.inviteHash || !verifyInviteCode(room.inviteHash, inviteCode)) {
+        const error = new Error('Invalid invite code for private room');
+        error.status = 403;
+        throw error;
+      }
+    }
+
     try {
       room.members.push(userId);
       await room.save();
@@ -262,11 +351,128 @@ async function joinRoom(roomIdOrId, userId) {
   return sanitizeRoom(room);
 }
 
+/**
+ * Retrieves the invite code for a private room. Only the room owner is authorized.
+ */
+async function getRoomInvite(roomIdOrId, userId) {
+  if (!userId) {
+    const error = new Error('Authentication required');
+    error.status = 401;
+    throw error;
+  }
+
+  if (!roomIdOrId || typeof roomIdOrId !== 'string') {
+    const error = new Error('Room identifier is required');
+    error.status = 400;
+    throw error;
+  }
+
+  const query = mongoose.Types.ObjectId.isValid(roomIdOrId)
+    ? { $or: [{ roomId: roomIdOrId }, { _id: roomIdOrId }] }
+    : { roomId: roomIdOrId };
+
+  let room;
+  try {
+    room = await Room.findOne(query);
+  } catch (err) {
+    const dbError = new Error(err.message || 'Database error occurred');
+    dbError.status = 500;
+    throw dbError;
+  }
+
+  if (!room) {
+    const error = new Error('Room not found');
+    error.status = 404;
+    throw error;
+  }
+
+  const userIdStr = String(userId);
+  const isOwner = room.owner && String(room.owner._id || room.owner) === userIdStr;
+  if (!isOwner) {
+    const error = new Error('Only the room owner can view invite code');
+    error.status = 403;
+    throw error;
+  }
+
+  if (!room.isPrivate) {
+    const error = new Error('Room is public and does not have an invite code');
+    error.status = 400;
+    throw error;
+  }
+
+  const error = new Error(
+    'Plaintext invite tokens are hashed at rest and cannot be retrieved. Use POST /api/rooms/:roomId/invite/rotate to generate or rotate an invitation.'
+  );
+  error.status = 400;
+  throw error;
+}
+
+/**
+ * Rotates the invite code for a private room. Only the room owner is authorized.
+ */
+async function rotateRoomInvite(roomIdOrId, userId) {
+  if (!userId) {
+    const error = new Error('Authentication required');
+    error.status = 401;
+    throw error;
+  }
+
+  if (!roomIdOrId || typeof roomIdOrId !== 'string') {
+    const error = new Error('Room identifier is required');
+    error.status = 400;
+    throw error;
+  }
+
+  const query = mongoose.Types.ObjectId.isValid(roomIdOrId)
+    ? { $or: [{ roomId: roomIdOrId }, { _id: roomIdOrId }] }
+    : { roomId: roomIdOrId };
+
+  let room;
+  try {
+    room = await Room.findOne(query);
+  } catch (err) {
+    const dbError = new Error(err.message || 'Database error occurred');
+    dbError.status = 500;
+    throw dbError;
+  }
+
+  if (!room) {
+    const error = new Error('Room not found');
+    error.status = 404;
+    throw error;
+  }
+
+  const userIdStr = String(userId);
+  const isOwner = room.owner && String(room.owner._id || room.owner) === userIdStr;
+  if (!isOwner) {
+    const error = new Error('Only the room owner can rotate invite code');
+    error.status = 403;
+    throw error;
+  }
+
+  if (!room.isPrivate) {
+    const error = new Error('Room is public and does not use an invite code');
+    error.status = 400;
+    throw error;
+  }
+
+  const newCode = crypto.randomBytes(16).toString('hex');
+  room.inviteHash = hashInviteCode(newCode);
+  room.inviteExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+  await room.save();
+
+  return newCode;
+}
+
 module.exports = {
   createRoom,
   listUserRooms,
   getRoomDetails,
   joinRoom,
+  getRoomInvite,
+  rotateRoomInvite,
+  verifyInviteCode,
+  hashInviteCode,
   sanitizeRoom,
   generateRoomId,
 };

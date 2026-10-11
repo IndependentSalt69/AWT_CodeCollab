@@ -1,10 +1,13 @@
 const express = require('express');
 const { authenticate } = require('../middleware/auth');
+const { joinRoomLimiter } = require('../middleware/rateLimiter');
 const {
   createRoomController,
   listRoomsController,
   getRoomController,
   joinRoomController,
+  getRoomInviteController,
+  rotateRoomInviteController,
 } = require('../controllers/roomController');
 
 const router = express.Router();
@@ -31,7 +34,7 @@ router.get('/', listRoomsController);
  * @desc    Join an existing room using body { roomId } or { joinCode }
  * @access  Private
  */
-router.post('/join', joinRoomController);
+router.post('/join', joinRoomLimiter, joinRoomController);
 
 /**
  * @route   GET /api/rooms/:roomId
@@ -45,6 +48,27 @@ router.get('/:roomId', getRoomController);
  * @desc    Join an existing room by path param roomId/joinCode
  * @access  Private
  */
-router.post('/:roomId/join', joinRoomController);
+router.post('/:roomId/join', joinRoomLimiter, joinRoomController);
+
+/**
+ * @route   GET /api/rooms/:roomId/invite
+ * @desc    Plaintext cannot be retrieved from hash; informs client to use rotate endpoint
+ * @access  Private
+ */
+router.get('/:roomId/invite', getRoomInviteController);
+
+/**
+ * @route   POST /api/rooms/:roomId/invite
+ * @desc    Generate/rotate invite code for a private room (owner only)
+ * @access  Private
+ */
+router.post('/:roomId/invite', rotateRoomInviteController);
+
+/**
+ * @route   POST /api/rooms/:roomId/invite/rotate
+ * @desc    Rotate invite code for a private room (owner only)
+ * @access  Private
+ */
+router.post('/:roomId/invite/rotate', rotateRoomInviteController);
 
 module.exports = router;

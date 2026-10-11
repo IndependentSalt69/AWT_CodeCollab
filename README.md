@@ -189,8 +189,14 @@ Visit `http://localhost:3000` to use the app.
 ## Running Tests
 
 ```bash
-cd backend
+# Run all standard automated test suites (18 suites, 222 passing tests)
 npm test
+
+# Run opt-in live MongoDB integration tests against local disposable instance (1 suite, 3 tests)
+npm run test:integration:mongo
+
+# Run frontend production build check
+npm run build
 ```
 
 ---

@@ -1,10 +1,22 @@
 const jwt = require('jsonwebtoken');
 
+const INSECURE_DEFAULT_SECRETS = new Set([
+  'dev_secret_key_12345',
+  'your_super_secret_jwt_key',
+  'secret',
+  'changeme',
+  'jwt_secret',
+]);
+
 function getJwtSecret() {
   const secret = process.env.JWT_SECRET;
-  if (!secret) {
-    if (process.env.NODE_ENV === 'production') {
-      throw new Error('FATAL: JWT_SECRET environment variable must be defined in production');
+  const isNonLocal = process.env.NODE_ENV === 'production' || process.env.NODE_ENV === 'staging';
+
+  if (!secret || INSECURE_DEFAULT_SECRETS.has(secret.trim())) {
+    if (isNonLocal) {
+      throw new Error(
+        'FATAL: A secure, non-default JWT_SECRET environment variable must be defined in non-local environments (production/staging)'
+      );
     }
     return 'dev_secret_key_12345';
   }

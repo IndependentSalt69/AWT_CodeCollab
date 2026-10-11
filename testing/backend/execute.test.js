@@ -8,6 +8,7 @@ const { generateToken } = require('../../backend/src/middleware/auth');
 const executeRouter = require('../../backend/src/routes/execute');
 const executionQueue = require('../../execution/engine/queue');
 const ExecutionRun = require('../../database/models/ExecutionRun');
+const Room = require('../../database/models/Room');
 
 const nextEvent = (socket, event) =>
   new Promise((resolve, reject) => {
@@ -50,13 +51,36 @@ describe('Backend Execution API Tests (POST /api/execute - M0.5d)', () => {
     email: 'viewer@example.com',
   };
 
+  const otherUser = {
+    _id: new mongoose.Types.ObjectId().toString(),
+    username: 'other',
+    email: 'other@example.com',
+  };
+
   const driverToken = generateToken(driverUser);
   const viewerToken = generateToken(viewerUser);
+  const otherToken = generateToken(otherUser);
 
   const testRoomId = `test-exec-room-${Date.now()}`;
   const otherRoomId = `other-room-${Date.now()}`;
 
   beforeAll(async () => {
+    mongoose.connection.readyState = 1;
+    jest.spyOn(ExecutionRun.prototype, 'save').mockResolvedValue(true);
+    jest.spyOn(Room, 'findOne').mockImplementation((query) => {
+      const rId = query?.roomId || (query?.$or && query.$or[0]?.roomId);
+      if (rId === testRoomId || rId === otherRoomId) {
+        return Promise.resolve({
+          roomId: rId,
+          name: rId,
+          owner: driverUser._id,
+          members: [driverUser._id, viewerUser._id, otherUser._id],
+          isPublic: true,
+        });
+      }
+      return Promise.resolve(null);
+    });
+
     // Start BullMQ execution worker
     executionQueue.startWorker();
 
@@ -97,16 +121,19 @@ describe('Backend Execution API Tests (POST /api/execute - M0.5d)', () => {
     ]);
 
     // Driver joins testRoomId -> becomes active driver
-    await emitAck(driverClient, 'room:join', { roomId: testRoomId, user: driverUser });
+    await emitAck(driverClient, 'room:join', { roomId: testRoomId, token: driverToken, user: driverUser });
 
     // Viewer joins testRoomId -> becomes viewer
-    await emitAck(viewerClient, 'room:join', { roomId: testRoomId, user: viewerUser });
+    await emitAck(viewerClient, 'room:join', { roomId: testRoomId, token: viewerToken, user: viewerUser });
 
     // Other client joins otherRoomId
-    await emitAck(otherRoomClient, 'room:join', { roomId: otherRoomId, user: { username: 'other' } });
+    await emitAck(otherRoomClient, 'room:join', { roomId: otherRoomId, token: otherToken, user: otherUser });
   });
 
   afterAll(async () => {
+    if (Room.findOne.mockRestore) Room.findOne.mockRestore();
+    if (ExecutionRun.prototype.save.mockRestore) ExecutionRun.prototype.save.mockRestore();
+    mongoose.connection.readyState = 0;
     if (driverClient) driverClient.disconnect();
     if (viewerClient) viewerClient.disconnect();
     if (otherRoomClient) otherRoomClient.disconnect();

@@ -16,10 +16,19 @@ module.exports = async function executeCode(runSpec) {
     throw new Error('Language and code are required for execution');
   }
 
-  const { language, code, timeout = sandboxConfig.timeoutMs, memory = sandboxConfig.memory } = runSpec;
+  const {
+    language,
+    code,
+    timeout = sandboxConfig.DEFAULT_TIMEOUT_MS,
+    memory = sandboxConfig.DEFAULT_MEMORY,
+  } = runSpec;
 
   if (!language || !code) {
     throw new Error('Language and code are required for execution');
+  }
+
+  if (Buffer.byteLength(code, 'utf8') > sandboxConfig.MAX_CODE_SIZE_BYTES) {
+    throw new Error(`Code exceeds maximum allowed size of ${sandboxConfig.MAX_CODE_SIZE_BYTES / 1024}KB`);
   }
 
   const rawOutput = await runInSandbox({

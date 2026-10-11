@@ -12,7 +12,9 @@ const { initRealtimeServer } = require('../../realtime/server');
 const executionQueue = require('../../execution/engine/queue');
 const executeRouter = require('./routes/execute');
 const authRouter = require('./routes/auth');
+const helmet = require('helmet');
 const roomsRouter = require('./routes/rooms');
+const { globalErrorHandler } = require('./middleware/errorHandler');
 
 const app = express();
 const httpServer = http.createServer(app);
@@ -20,6 +22,12 @@ const httpServer = http.createServer(app);
 connectDB().catch((err) => {
   console.error(`[MongoDB] Initial connection error: ${err.message}`);
 });
+
+// Security headers (SEC-API-02)
+app.use(helmet({
+  contentSecurityPolicy: false, // Prevent breaking frontend cross-origin asset loading
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+}));
 
 // Middleware
 app.use(cors({
@@ -50,6 +58,9 @@ app.get('/health', (req, res) => {
 app.use('/api/auth', authRouter);
 app.use('/api/rooms', roomsRouter);
 app.use('/api/execute', executeRouter);
+
+// Global sanitized error handler (SEC-API-02)
+app.use(globalErrorHandler);
 
 
 // Start execution queue worker

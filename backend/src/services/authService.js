@@ -3,6 +3,9 @@ const mongoose = require('mongoose');
 const User = require('../../../database/models/User');
 const { generateToken } = require('../middleware/auth');
 
+// Precomputed dummy bcrypt hash (cost factor 10) to mitigate auth timing discrepancies on non-existent user lookups
+const DUMMY_PASSWORD_HASH = bcrypt.hashSync('timing-mitigation-dummy-password-codecollab', 10);
+
 /**
  * Validates email format with standard regex.
  */
@@ -53,17 +56,13 @@ async function registerUser({ username, email, password }) {
     throw error;
   }
 
-  // Check for existing username or email
+  // Check for existing username or email - unify response to prevent enumeration
   const existingUser = await User.findOne({
     $or: [{ username: trimmedUsername }, { email: normalizedEmail }],
   });
 
   if (existingUser) {
-    const error = new Error(
-      existingUser.username === trimmedUsername
-        ? 'Username is already taken'
-        : 'An account with this email already exists'
-    );
+    const error = new Error('Username or email is already registered');
     error.status = 409;
     throw error;
   }
@@ -78,7 +77,17 @@ async function registerUser({ username, email, password }) {
     passwordHash,
   });
 
-  await newUser.save();
+  try {
+    await newUser.save();
+  } catch (err) {
+    // Handle MongoDB unique-index duplicate key error (code 11000) consistently
+    if (err && (err.code === 11000 || err.codeName === 'DuplicateKey' || String(err.message).includes('E11000'))) {
+      const error = new Error('Username or email is already registered');
+      error.status = 409;
+      throw error;
+    }
+    throw err;
+  }
 
   const userPayload = {
     id: newUser._id.toString(),
@@ -125,7 +134,9 @@ async function loginUser({ email, username, emailOrUsername, password }) {
     ],
   });
 
+  // If user is missing, perform dummy bcrypt compare to mitigate timing discrepancies
   if (!user) {
+    await bcrypt.compare(password, DUMMY_PASSWORD_HASH);
     const error = new Error('Invalid credentials');
     error.status = 401;
     throw error;

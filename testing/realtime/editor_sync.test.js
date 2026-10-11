@@ -1,6 +1,18 @@
 const http = require('http');
 const { io: connect } = require('socket.io-client');
+const jwt = require('jsonwebtoken');
+const mongoose = require('mongoose');
+const Room = require('../../database/models/Room');
 const { initRealtimeServer } = require('../../realtime/server');
+
+const JWT_SECRET = process.env.JWT_SECRET || 'test-jwt-secret';
+
+const generateToken = (userId, username) =>
+  jwt.sign(
+    { id: userId, username, email: `${username.toLowerCase().replace(/\s+/g, '')}@example.com` },
+    JWT_SECRET,
+    { expiresIn: '1h' }
+  );
 
 const SOCKET_EVENTS = {
   ROOM: {
@@ -44,7 +56,36 @@ describe('M0.4b — Server-side Editor Synchronization & Hardening', () => {
   let server;
   let clients;
 
+  beforeAll(() => {
+    process.env.JWT_SECRET = JWT_SECRET;
+    mongoose.connection.readyState = 1;
+  });
+
   beforeEach(async () => {
+    Room.findOne = jest.fn().mockImplementation((query) => {
+      const roomId = query?.roomId || (query?.$or && query.$or[0]?.roomId) || 'test-room';
+      const doc = {
+        roomId,
+        name: roomId,
+        owner: 'driver-id',
+        members: [
+          'driver-id',
+          'viewer1-id',
+          'viewer2-id',
+          'viewer-id',
+          'temp-id',
+          'driverA-id',
+          'viewerA-id',
+          'driverB-id',
+          'viewerB-id',
+          'userA-id',
+          'userB-id',
+        ],
+        isPublic: true,
+      };
+      return Promise.resolve(doc);
+    });
+
     server = http.createServer();
     io = initRealtimeServer(server);
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -74,9 +115,9 @@ describe('M0.4b — Server-side Editor Synchronization & Hardening', () => {
     const [driver, viewer1, viewer2] = clients;
     const roomId = 'editor-sync-room';
 
-    await emitAck(driver, SOCKET_EVENTS.ROOM.JOIN, { roomId, user: { name: 'Driver' } });
-    await emitAck(viewer1, SOCKET_EVENTS.ROOM.JOIN, { roomId, user: { name: 'Viewer1' } });
-    await emitAck(viewer2, SOCKET_EVENTS.ROOM.JOIN, { roomId, user: { name: 'Viewer2' } });
+    await emitAck(driver, SOCKET_EVENTS.ROOM.JOIN, { roomId, token: generateToken('driver-id', 'Driver'), user: { name: 'Driver' } });
+    await emitAck(viewer1, SOCKET_EVENTS.ROOM.JOIN, { roomId, token: generateToken('viewer1-id', 'Viewer1'), user: { name: 'Viewer1' } });
+    await emitAck(viewer2, SOCKET_EVENTS.ROOM.JOIN, { roomId, token: generateToken('viewer2-id', 'Viewer2'), user: { name: 'Viewer2' } });
 
     const selfUpdateSpy = jest.fn();
     driver.on(SOCKET_EVENTS.EDITOR.UPDATE, selfUpdateSpy);
@@ -112,8 +153,8 @@ describe('M0.4b — Server-side Editor Synchronization & Hardening', () => {
     const [driver, viewer] = clients;
     const roomId = 'viewer-rejection-room';
 
-    await emitAck(driver, SOCKET_EVENTS.ROOM.JOIN, { roomId, user: { name: 'Driver' } });
-    await emitAck(viewer, SOCKET_EVENTS.ROOM.JOIN, { roomId, user: { name: 'Viewer' } });
+    await emitAck(driver, SOCKET_EVENTS.ROOM.JOIN, { roomId, token: generateToken('driver-id', 'Driver'), user: { name: 'Driver' } });
+    await emitAck(viewer, SOCKET_EVENTS.ROOM.JOIN, { roomId, token: generateToken('viewer-id', 'Viewer'), user: { name: 'Viewer' } });
 
     const driverUpdateSpy = jest.fn();
     driver.on(SOCKET_EVENTS.EDITOR.UPDATE, driverUpdateSpy);
@@ -146,7 +187,7 @@ describe('M0.4b — Server-side Editor Synchronization & Hardening', () => {
     expect(notMemberAck.error).toMatch(/not a member/i);
 
     // Join and immediately leave to clear driver state
-    await emitAck(driverClient, SOCKET_EVENTS.ROOM.JOIN, { roomId, user: { name: 'Temp' } });
+    await emitAck(driverClient, SOCKET_EVENTS.ROOM.JOIN, { roomId, token: generateToken('temp-id', 'Temp'), user: { name: 'Temp' } });
     await emitAck(driverClient, SOCKET_EVENTS.ROOM.LEAVE, { roomId });
 
     // Try editing in empty/no-driver room
@@ -164,11 +205,11 @@ describe('M0.4b — Server-side Editor Synchronization & Hardening', () => {
     const roomA = 'room-alpha';
     const roomB = 'room-beta';
 
-    await emitAck(driverA, SOCKET_EVENTS.ROOM.JOIN, { roomId: roomA, user: { name: 'Driver A' } });
-    await emitAck(viewerA, SOCKET_EVENTS.ROOM.JOIN, { roomId: roomA, user: { name: 'Viewer A' } });
+    await emitAck(driverA, SOCKET_EVENTS.ROOM.JOIN, { roomId: roomA, token: generateToken('driverA-id', 'Driver A'), user: { name: 'Driver A' } });
+    await emitAck(viewerA, SOCKET_EVENTS.ROOM.JOIN, { roomId: roomA, token: generateToken('viewerA-id', 'Viewer A'), user: { name: 'Viewer A' } });
 
-    await emitAck(driverB, SOCKET_EVENTS.ROOM.JOIN, { roomId: roomB, user: { name: 'Driver B' } });
-    await emitAck(viewerB, SOCKET_EVENTS.ROOM.JOIN, { roomId: roomB, user: { name: 'Viewer B' } });
+    await emitAck(driverB, SOCKET_EVENTS.ROOM.JOIN, { roomId: roomB, token: generateToken('driverB-id', 'Driver B'), user: { name: 'Driver B' } });
+    await emitAck(viewerB, SOCKET_EVENTS.ROOM.JOIN, { roomId: roomB, token: generateToken('viewerB-id', 'Viewer B'), user: { name: 'Viewer B' } });
 
     const driverBUpdateSpy = jest.fn();
     const viewerBUpdateSpy = jest.fn();
@@ -199,8 +240,8 @@ describe('M0.4b — Server-side Editor Synchronization & Hardening', () => {
     const [userA, userB] = clients;
     const roomId = 'transfer-auth-room';
 
-    await emitAck(userA, SOCKET_EVENTS.ROOM.JOIN, { roomId, user: { name: 'User A' } });
-    await emitAck(userB, SOCKET_EVENTS.ROOM.JOIN, { roomId, user: { name: 'User B' } });
+    await emitAck(userA, SOCKET_EVENTS.ROOM.JOIN, { roomId, token: generateToken('userA-id', 'User A'), user: { name: 'User A' } });
+    await emitAck(userB, SOCKET_EVENTS.ROOM.JOIN, { roomId, token: generateToken('userB-id', 'User B'), user: { name: 'User B' } });
 
     // Initially userA is Driver, userB is Viewer
     const initialChange = await emitAck(userA, SOCKET_EVENTS.EDITOR.CHANGE, {
@@ -251,8 +292,8 @@ describe('M0.4b — Server-side Editor Synchronization & Hardening', () => {
     const [driver, viewer] = clients;
     const roomId = 'lang-cursor-room';
 
-    await emitAck(driver, SOCKET_EVENTS.ROOM.JOIN, { roomId, user: { name: 'Driver' } });
-    await emitAck(viewer, SOCKET_EVENTS.ROOM.JOIN, { roomId, user: { name: 'Viewer' } });
+    await emitAck(driver, SOCKET_EVENTS.ROOM.JOIN, { roomId, token: generateToken('driver-id', 'Driver'), user: { name: 'Driver' } });
+    await emitAck(viewer, SOCKET_EVENTS.ROOM.JOIN, { roomId, token: generateToken('viewer-id', 'Viewer'), user: { name: 'Viewer' } });
 
     // 1. Language change with cursor
     const updatePromise1 = nextEvent(viewer, SOCKET_EVENTS.EDITOR.UPDATE);
@@ -294,7 +335,7 @@ describe('M0.4b — Server-side Editor Synchronization & Hardening', () => {
     const [driver] = clients;
     const roomId = 'malformed-room';
 
-    await emitAck(driver, SOCKET_EVENTS.ROOM.JOIN, { roomId, user: { name: 'Driver' } });
+    await emitAck(driver, SOCKET_EVENTS.ROOM.JOIN, { roomId, token: generateToken('driver-id', 'Driver'), user: { name: 'Driver' } });
 
     // Non-object payload
     const nonObj = await emitAck(driver, SOCKET_EVENTS.EDITOR.CHANGE, null);
@@ -337,5 +378,45 @@ describe('M0.4b — Server-side Editor Synchronization & Hardening', () => {
     });
     expect(invalidCursor.ok).toBe(false);
     expect(invalidCursor.error).toMatch(/cursor/i);
+  });
+
+  test('rejects editor:change exceeding 64 KiB UTF-8 (ASCII & multibyte Unicode) without broadcasting', async () => {
+    const [driver, viewer] = clients;
+    const roomId = 'oversized-code-room';
+
+    await emitAck(driver, SOCKET_EVENTS.ROOM.JOIN, { roomId, token: generateToken('driver-id', 'Driver'), user: { name: 'Driver' } });
+    await emitAck(viewer, SOCKET_EVENTS.ROOM.JOIN, { roomId, token: generateToken('viewer-id', 'Viewer'), user: { name: 'Viewer' } });
+
+    const viewerUpdateSpy = jest.fn();
+    viewer.on(SOCKET_EVENTS.EDITOR.UPDATE, viewerUpdateSpy);
+
+    // 1. Oversized ASCII input (65537 bytes)
+    const oversizedAscii = 'a'.repeat(65537);
+    const asciiAck = await emitAck(driver, SOCKET_EVENTS.EDITOR.CHANGE, {
+      roomId,
+      code: oversizedAscii,
+      language: 'python',
+    });
+    expect(asciiAck.ok).toBe(false);
+    expect(asciiAck.error).toMatch(/exceeds maximum allowed size of 64 KiB/i);
+
+    // 2. Multibyte Unicode input: string length is 25,000 chars, but each char is 3 UTF-8 bytes = 75,000 bytes > 65,536 bytes
+    const multibyteChar = '\u20AC'; // Euro sign (€), 3 bytes in UTF-8
+    const oversizedUnicode = multibyteChar.repeat(25000);
+    expect(oversizedUnicode.length).toBeLessThan(65536);
+    expect(Buffer.byteLength(oversizedUnicode, 'utf8')).toBe(75000);
+
+    const unicodeAck = await emitAck(driver, SOCKET_EVENTS.EDITOR.CHANGE, {
+      roomId,
+      code: oversizedUnicode,
+      language: 'python',
+    });
+    expect(unicodeAck.ok).toBe(false);
+    expect(unicodeAck.error).toMatch(/exceeds maximum allowed size of 64 KiB/i);
+
+    // Verify viewer NEVER received an editor:update event
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(viewerUpdateSpy).not.toHaveBeenCalled();
+    viewer.off(SOCKET_EVENTS.EDITOR.UPDATE, viewerUpdateSpy);
   });
 });

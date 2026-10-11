@@ -3,6 +3,8 @@ const executionQueue = require('../../../execution/engine/queue');
 const ExecutionRun = require('../../../database/models/ExecutionRun');
 const Room = require('../../../database/models/Room');
 const { getDriver, getRemainingMembers } = require('../../../realtime/server/driverState');
+const { parseMemoryToBytes } = require('../../../execution/engine/executor');
+const sandboxConfig = require('../../../execution/engine/sandboxConfig');
 
 const SUPPORTED_LANGUAGES = ['python', 'java', 'cpp'];
 const EXECUTABLE_LANGUAGES = ['python']; // Languages with dynamic container runner implemented
@@ -49,16 +51,11 @@ async function verifyDriverPermission({ roomId, user, socketId, io }) {
       };
     }
 
-    // Verify authenticated HTTP user matches the driver socket identity
+    // Verify authenticated HTTP user matches the driver socket identity via immutable IDs
     const driverUserId = driverUser._id || driverUser.id || driverUser.userId;
     const reqUserId = user?._id || user?.id || user?.userId;
-    const driverUsername = driverUser.username || driverUser.name;
-    const reqUsername = user?.username || user?.name;
 
-    const idMatch = driverUserId && reqUserId && String(driverUserId) === String(reqUserId);
-    const nameMatch = driverUsername && reqUsername && driverUsername === reqUsername;
-
-    if (!idMatch && !nameMatch) {
+    if (!driverUserId || !reqUserId || String(driverUserId) !== String(reqUserId)) {
       return {
         authorized: false,
         error: 'Authenticated user does not match the active room driver session',
@@ -116,15 +113,38 @@ function validateExecutionRequest({ roomId, language, code, timeout, memory }) {
     return { valid: false, error: 'code must be a string' };
   }
 
+  if (Buffer.byteLength(code, 'utf8') > sandboxConfig.MAX_CODE_SIZE_BYTES) {
+    return {
+      valid: false,
+      error: `code exceeds maximum allowed size of ${sandboxConfig.MAX_CODE_SIZE_BYTES / 1024}KB`,
+    };
+  }
+
   if (timeout !== undefined && timeout !== null) {
     if (typeof timeout !== 'number' || isNaN(timeout) || timeout <= 0) {
       return { valid: false, error: 'timeout must be a positive number in milliseconds' };
+    }
+    if (timeout > sandboxConfig.MAX_TIMEOUT_MS) {
+      return {
+        valid: false,
+        error: `timeout exceeds maximum allowed execution limit of ${sandboxConfig.MAX_TIMEOUT_MS}ms`,
+      };
     }
   }
 
   if (memory !== undefined && memory !== null) {
     if (typeof memory !== 'string' && typeof memory !== 'number') {
       return { valid: false, error: 'memory must be a string (e.g. 256m) or number in bytes' };
+    }
+    const memBytes = parseMemoryToBytes(memory);
+    if (memBytes === null || isNaN(memBytes) || memBytes <= 0) {
+      return { valid: false, error: 'memory must be a valid positive memory specification' };
+    }
+    if (memBytes > sandboxConfig.MAX_MEMORY_BYTES) {
+      return {
+        valid: false,
+        error: `memory exceeds maximum allowed container limit of ${sandboxConfig.DEFAULT_MEMORY}`,
+      };
     }
   }
 
@@ -163,9 +183,19 @@ async function executeCodeService({ roomId, language, code, timeout, memory, use
     throw error;
   }
 
+  // 3. Admission Control Check before creating ExecutionRun (SEC-EXEC-05)
+  const waitingCount = await executionQueue.getLength();
+  if (waitingCount >= sandboxConfig.MAX_WAITING_JOBS) {
+    const capacityErr = new Error(
+      `Execution queue is at capacity (max ${sandboxConfig.MAX_WAITING_JOBS} jobs waiting). Please retry shortly.`
+    );
+    capacityErr.status = 429;
+    throw capacityErr;
+  }
+
   const triggeredBy = toObjectId(user?._id || user?.id || user?.userId);
 
-  // 3. Persist initial ExecutionRun document (status: queued)
+  // 4. Persist initial ExecutionRun document (status: queued)
   let executionRun = null;
   const isDbConnected = mongoose.connection.readyState === 1;
 
@@ -201,7 +231,7 @@ async function executeCodeService({ roomId, language, code, timeout, memory, use
 
   const runId = executionRun._id.toString();
 
-  // 4. Realtime Broadcast: execution:started
+  // 5. Realtime Broadcast: execution:started
   if (io) {
     io.to(roomId).emit('execution:started', {
       runId,
@@ -213,7 +243,7 @@ async function executeCodeService({ roomId, language, code, timeout, memory, use
     });
   }
 
-  // 5. Execute via BullMQ Queue / Worker
+  // 6. Execute via BullMQ Queue / Worker
   // Ensure queue worker is initialized
   executionQueue.startWorker();
 
@@ -228,6 +258,10 @@ async function executeCodeService({ roomId, language, code, timeout, memory, use
       userId: triggeredBy.toString(),
     });
   } catch (queueErr) {
+    if (queueErr.status === 429) {
+      throw queueErr;
+    }
+
     // Handle queue failure
     if (isDbConnected && executionRun.save) {
       executionRun.status = 'failed';
