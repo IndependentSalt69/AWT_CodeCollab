@@ -7,6 +7,11 @@ const sandboxConfig = require('../../execution/engine/sandboxConfig');
 describe('Dockerode Execution Orchestrator Tests (M0.5b)', () => {
   const docker = new Docker();
 
+  beforeAll(() => {
+    // Explicit opt-in for live local developer testing against local Docker engine
+    process.env.ALLOW_DEFAULT_DOCKER_FALLBACK = 'true';
+  });
+
   // Give Docker container operations sufficient test timeout
   jest.setTimeout(30000);
 

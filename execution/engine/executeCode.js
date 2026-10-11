@@ -38,6 +38,7 @@ module.exports = async function executeCode(runSpec) {
     memory,
     cpu: sandboxConfig.cpu,
     network: sandboxConfig.network,
+    runtime: runSpec.runtime || sandboxConfig.CONTAINER_RUNTIME,
   });
 
   return parseExecutionResult(rawOutput);

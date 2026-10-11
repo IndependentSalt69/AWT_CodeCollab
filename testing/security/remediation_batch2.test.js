@@ -19,6 +19,7 @@ describe('Security Remediation Batch 2: Sandbox & Resource Hardening', () => {
   jest.setTimeout(45000);
 
   beforeAll(() => {
+    process.env.ALLOW_DEFAULT_DOCKER_FALLBACK = 'true';
     mongoose.connection.readyState = 1;
     jest.spyOn(ExecutionRun.prototype, 'save').mockResolvedValue(true);
   });

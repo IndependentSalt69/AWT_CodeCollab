@@ -1,6 +1,5 @@
 const { Queue, Worker, QueueEvents } = require('bullmq');
 const IORedis = require('ioredis');
-const executeCode = require('./executeCode');
 const sandboxConfig = require('./sandboxConfig');
 
 const EXECUTION_QUEUE_NAME = 'codecollab-execution-queue';
@@ -98,7 +97,33 @@ class ExecutionQueue {
   }
 
   /**
+   * Returns true if a BullMQ Worker is currently active on this instance.
+   */
+  hasWorker() {
+    return Boolean(this._worker && !this._worker.closing && !this._worker.closed);
+  }
+
+  /**
+   * Returns the active worker instance, or null.
+   */
+  getWorker() {
+    return this._worker;
+  }
+
+  /**
+   * Stops the active BullMQ Worker if running.
+   */
+  async stopWorker(force = true) {
+    if (this._worker) {
+      await this._worker.close(force);
+      this._worker = null;
+    }
+  }
+
+  /**
    * Starts the BullMQ Worker to process execution jobs.
+   * Note: The execution engine is lazy-required only when starting the worker
+   * so that pure queue producers (like the API backend) never import Dockerode.
    */
   startWorker(processor = null, workerOptions = {}) {
     if (this._isClosed) {
@@ -113,6 +138,8 @@ class ExecutionQueue {
       : this.concurrency;
 
     const jobProcessor = processor || (async (job) => {
+      // Lazy load executeCode only when worker is explicitly started
+      const executeCode = require('./executeCode');
       const { language, code, timeout, memory } = job.data;
       try {
         const result = await executeCode({
