@@ -1,11 +1,13 @@
 const { ExecutionQueue, parseRedisUrl, DEFAULT_CONCURRENCY, EXECUTION_QUEUE_NAME } = require('../../execution/engine/queue');
 const sandboxConfig = require('../../execution/engine/sandboxConfig');
+const { verifyRedisPreflight } = require('../redisTestHelper');
 
 describe('Redis + BullMQ Execution Queue Tests (M0.5c)', () => {
   let executionQueue;
   const testQueueName = `test-exec-queue-${Date.now()}`;
 
   beforeAll(async () => {
+    await verifyRedisPreflight();
     executionQueue = new ExecutionQueue({
       queueName: testQueueName,
       concurrency: 2,

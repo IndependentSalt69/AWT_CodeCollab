@@ -36,5 +36,10 @@
     "@testing-library/react": "^16.3.3",
     "babel-plugin-transform-import-meta": "^2.3.3",
     "jest-environment-jsdom": "^30.5.2"
+  },
+  "jest": {
+    "setupFiles": [
+      "<rootDir>/testing/setupEnv.js"
+    ]
   }
 }

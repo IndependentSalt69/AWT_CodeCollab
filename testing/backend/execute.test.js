@@ -9,6 +9,7 @@ const executeRouter = require('../../backend/src/routes/execute');
 const executionQueue = require('../../execution/engine/queue');
 const ExecutionRun = require('../../database/models/ExecutionRun');
 const Room = require('../../database/models/Room');
+const { verifyRedisPreflight } = require('../redisTestHelper');
 
 const nextEvent = (socket, event) =>
   new Promise((resolve, reject) => {
@@ -65,6 +66,7 @@ describe('Backend Execution API Tests (POST /api/execute - M0.5d)', () => {
   const otherRoomId = `other-room-${Date.now()}`;
 
   beforeAll(async () => {
+    await verifyRedisPreflight();
     mongoose.connection.readyState = 1;
     jest.spyOn(ExecutionRun.prototype, 'save').mockResolvedValue(true);
     jest.spyOn(Room, 'findOne').mockImplementation((query) => {
