@@ -1,65 +1,33 @@
 const Docker = require('dockerode');
 const { PassThrough } = require('stream');
 const sandboxConfig = require('./sandboxConfig');
+const { parseMemoryToBytes, parseCpuToNanoCPUs } = require('./resourceLimits');
+
+const { parseDockerConnectionConfig, validateRuntime, verifyRuntimeAvailable } = require('./dockerConfig');
 
 // Singleton Docker instance for the execution engine
 let dockerInstance = null;
-function getDockerClient() {
+function getDockerClient(customConfig) {
+  if (customConfig) {
+    const opts = typeof customConfig === 'string'
+      ? parseDockerConnectionConfig(customConfig)
+      : customConfig;
+    return new Docker(opts);
+  }
   if (!dockerInstance) {
-    dockerInstance = new Docker();
+    const dockerOpts = parseDockerConnectionConfig(process.env.DOCKER_HOST);
+    dockerInstance = new Docker(dockerOpts);
   }
   return dockerInstance;
+}
+
+function resetDockerClient() {
+  dockerInstance = null;
 }
 
 const LANGUAGE_IMAGE_MAP = {
   python: 'codecollab-runner-python:latest',
 };
-
-/**
- * Converts memory string (e.g. '256m', '512m', '1g') or number to bytes.
- * Returns null if input is invalid, NaN, or non-positive.
- */
-function parseMemoryToBytes(mem) {
-  if (mem === undefined || mem === null) {
-    return sandboxConfig.MAX_MEMORY_BYTES;
-  }
-  if (typeof mem === 'number') {
-    if (isNaN(mem) || mem <= 0 || !isFinite(mem)) {
-      return null;
-    }
-    return Math.round(mem);
-  }
-  if (typeof mem !== 'string') {
-    return null;
-  }
-  const match = mem.trim().match(/^(\d+(?:\.\d+)?)\s*([kmgKMG]?)(?:b|B)?$/i);
-  if (!match) {
-    return null;
-  }
-  const val = parseFloat(match[1]);
-  if (isNaN(val) || val <= 0 || !isFinite(val)) {
-    return null;
-  }
-  const unit = match[2].toLowerCase();
-  if (unit === 'g') return Math.round(val * 1024 * 1024 * 1024);
-  if (unit === 'm') return Math.round(val * 1024 * 1024);
-  if (unit === 'k') return Math.round(val * 1024);
-  return Math.round(val);
-}
-
-/**
- * Converts CPU quota string or number to NanoCPUs (1 CPU = 1e9 NanoCPUs).
- */
-function parseCpuToNanoCPUs(cpu) {
-  if (typeof cpu === 'number') {
-    return Math.round(cpu * 1e9);
-  }
-  if (!cpu || typeof cpu !== 'string') {
-    return 500000000; // 0.5 CPU
-  }
-  const parsed = parseFloat(cpu);
-  return isNaN(parsed) ? 500000000 : Math.round(parsed * 1e9);
-}
 
 /**
  * Runs submitted code in an ephemeral Docker container.
@@ -80,6 +48,7 @@ async function runInSandbox({
   memory = sandboxConfig.DEFAULT_MEMORY,
   cpu = sandboxConfig.cpu,
   network = sandboxConfig.network,
+  runtime = sandboxConfig.CONTAINER_RUNTIME,
 }) {
   const normalizedLang = (language || '').toLowerCase().trim();
   const imageName = LANGUAGE_IMAGE_MAP[normalizedLang];
@@ -97,7 +66,15 @@ async function runInSandbox({
     throw new Error(`Code exceeds maximum allowed size of ${sandboxConfig.MAX_CODE_SIZE_BYTES / 1024}KB`);
   }
 
+  // Validate container runtime (runc or runsc)
+  const selectedRuntime = validateRuntime(runtime);
+
   const docker = getDockerClient();
+
+  // If gVisor (runsc) is requested, verify daemon support; never silently downgrade
+  if (selectedRuntime === 'runsc') {
+    await verifyRuntimeAvailable(docker, 'runsc');
+  }
 
   // Parse and enforce hard safety ceilings
   let parsedMemoryBytes = parseMemoryToBytes(memory);
@@ -137,6 +114,7 @@ async function runInSandbox({
         CapDrop: ['ALL'],
         SecurityOpt: ['no-new-privileges:true'],
         Tmpfs: { '/tmp': 'rw,noexec,nosuid,size=32m' },
+        ...(selectedRuntime === 'runsc' ? { Runtime: 'runsc' } : {}),
       },
     });
 
@@ -250,6 +228,7 @@ async function runInSandbox({
           cpu: nanoCPUs,
           network,
           maxOutputBytes: MAX_OUTPUT,
+          runtime: selectedRuntime,
         },
       };
     }
@@ -269,6 +248,7 @@ async function runInSandbox({
           cpu: nanoCPUs,
           network,
           maxOutputBytes: MAX_OUTPUT,
+          runtime: selectedRuntime,
         },
       };
     }
@@ -289,6 +269,7 @@ async function runInSandbox({
         cpu: nanoCPUs,
         network,
         maxOutputBytes: MAX_OUTPUT,
+        runtime: selectedRuntime,
       },
     };
   } finally {
@@ -308,6 +289,10 @@ async function runInSandbox({
 
 module.exports = {
   runInSandbox,
+  getDockerClient,
+  resetDockerClient,
+  validateRuntime,
+  verifyRuntimeAvailable,
   parseMemoryToBytes,
   parseCpuToNanoCPUs,
   LANGUAGE_IMAGE_MAP,

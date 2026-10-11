@@ -3,7 +3,7 @@ const executionQueue = require('../../../execution/engine/queue');
 const ExecutionRun = require('../../../database/models/ExecutionRun');
 const Room = require('../../../database/models/Room');
 const { getDriver, getRemainingMembers } = require('../../../realtime/server/driverState');
-const { parseMemoryToBytes } = require('../../../execution/engine/executor');
+const { parseMemoryToBytes } = require('../../../execution/engine/resourceLimits');
 const sandboxConfig = require('../../../execution/engine/sandboxConfig');
 
 const SUPPORTED_LANGUAGES = ['python', 'java', 'cpp'];
@@ -243,10 +243,7 @@ async function executeCodeService({ roomId, language, code, timeout, memory, use
     });
   }
 
-  // 6. Execute via BullMQ Queue / Worker
-  // Ensure queue worker is initialized
-  executionQueue.startWorker();
-
+  // 6. Execute via BullMQ Queue (Standalone Worker consumes from queue)
   let execResult;
   try {
     execResult = await executionQueue.execute({

@@ -188,3 +188,104 @@
   - Production Backend Server (`backend/package.json`): **0 vulnerabilities.** All server runtime dependencies are clean; no backend HTTP routes, sockets, or execution pipelines are exposed.
   - Production Frontend Client Bundle (`frontend/package.json`): **2 Low severity vulnerabilities** in `dompurify` (<=3.4.15) bundled transitively via `monaco-editor` (`>=0.57.0-rc.2`) (GHSA-p98j-92pf-mc4p, GHSA-6688-9rhm-gjv2). Confined to client-side tooltip rendering; CodeCollab does not accept user HTML via DOMPurify hooks.
   - Development & Test Tooling (`devDependencies`): **35 vulnerabilities** (5 moderate, 30 high) in Jest/nodemon/Istanbul/Babel build tools; completely excluded from production container images and runtime environments. Total repository advisories: 37.
+
+## 12. M1.0 Phase A: Backend-Worker Separation & Queue Decoupling
+- **Architectural Decoupling (`SEC-EXEC-06`):**
+  - **Public Backend Producer Isolation**: Completely removed `executionQueue.startWorker()` from [`backend/src/index.js`](file:///d:/AWT_CodeCollab/backend/src/index.js) and [`backend/src/services/executionService.js`](file:///d:/AWT_CodeCollab/backend/src/services/executionService.js). The public Express server and Socket.IO gateway no longer instantiate an in-process BullMQ worker or touch the Docker Remote API.
+  - **Pure Queue Producer Boundary**: Decoupled `execution/engine/queue.js` and `backend/src/services/executionService.js` from Dockerode. Extracted memory and CPU parsing utilities into [`execution/engine/resourceLimits.js`](file:///d:/AWT_CodeCollab/execution/engine/resourceLimits.js). The backend loads zero Docker dependencies into memory.
+  - **Standalone Execution Worker Entrypoint**: Created dedicated [`execution/worker/index.js`](file:///d:/AWT_CodeCollab/execution/worker/index.js) running as an independent process (`npm run start:worker`). It consumes jobs from Redis BullMQ queue (`codecollab-execution-queue`), manages the ephemeral Python sandbox, enforces bounded concurrency (2-4), sanitizes credentials in logs, and handles `SIGTERM`/`SIGINT` graceful shutdown.
+- **Local Development Operation**:
+  - Backend and worker run as separate processes via `npm run start:backend` and `npm run start:worker`, or via Docker Compose profile `docker compose --profile local-dev-execution up`.
+  - In [`infrastructure/docker-compose.yml`](file:///d:/AWT_CodeCollab/infrastructure/docker-compose.yml), `execution-worker` runs `node execution/worker/index.js` and requires only `REDIS_URL`, dropping unnecessary `PORT=5001`, `MONGO_URI`, and `JWT_SECRET` access.
+- **Remaining Security Limitations & Next Phase Requirement**:
+  - **Host Docker Socket Boundary**: In local development and Phase A, the standalone `execution-worker` still connects to the host Docker daemon (`/var/run/docker.sock`). While the public backend is protected, a sandbox escape inside the worker could still access the host Docker daemon.
+  - **Phase B Requirement**: Rootless Docker (`dockerd-rootless.sh` / `docker:dind-rootless`) and optional gVisor (`runsc`) must be implemented in Phase B before the execution subsystem is safe for public multi-tenant deployment.
+- **Verification**:
+  - Added [`testing/execution/worker.test.js`](file:///d:/AWT_CodeCollab/testing/execution/worker.test.js) (10 tests) and [`testing/security/backend_worker_isolation.test.js`](file:///d:/AWT_CodeCollab/testing/security/backend_worker_isolation.test.js) (7 tests).
+  - Standard Test Suite (`npm test`): **239 passed tests** across 20 suites with 0 failures and 0 open handle leaks.
+
+## 13. M1.0 Phase B: Rootless Execution Daemon & Runtime Isolation
+- **Host Socket Elimination & Configurable Connectivity (`SEC-EXEC-07`):**
+  - **Zero Host Socket Dependency**: Removed `/var/run/docker.sock` volume mount from `execution-worker` in [`infrastructure/docker-compose.yml`](file:///d:/AWT_CodeCollab/infrastructure/docker-compose.yml).
+  - **Explicit Endpoint Resolution ([`execution/engine/dockerConfig.js`](file:///d:/AWT_CodeCollab/execution/engine/dockerConfig.js))**:
+    - Supports `DOCKER_HOST` configuration for worker only.
+    - Strictly blocks direct connections to `/var/run/docker.sock` unless `ALLOW_HOST_DOCKER_SOCKET=true` is set.
+    - Rejects missing/empty `DOCKER_HOST` in worker/production environments without implicit fallback (`ALLOW_DEFAULT_DOCKER_FALLBACK=true` required for single-developer testing).
+    - Rejects wildcard `0.0.0.0` TCP addresses, invalid ports, and unsupported URI schemes.
+    - Supports user-scoped unprivileged Unix sockets (`unix:///run/user/<uid>/docker.sock`), TCP endpoints (`tcp://execution-daemon:2375`), and Windows named pipes (`npipe:////./pipe/docker_engine`).
+- **Internal Docker Compose Network Hardening**:
+  - `backend`, `frontend`, `mongo`, `redis` join `app-network` (`driver: bridge`).
+  - `execution-daemon` (`docker:27-dind-rootless`) joins `execution-network` (`driver: bridge`, `internal: true`).
+  - `execution-daemon` exposes **zero** published host ports.
+  - The public backend is on `app-network` and has **zero** DNS or network access to `execution-daemon`.
+  - `execution-worker` joins `app-network` (to consume BullMQ Redis jobs) and `execution-network` (to issue Docker API calls to `tcp://execution-daemon:2375`).
+- **Optional gVisor (`runsc`) OCI Runtime Support**:
+  - Validates `CONTAINER_RUNTIME`: supports `runc` and `runsc`.
+  - When `CONTAINER_RUNTIME=runsc` is requested, `verifyRuntimeAvailable()` queries daemon capabilities via `docker.info()`.
+  - If `runsc` is not registered in the daemon, it fails closed with an actionable error. It **never silently downgrades** to `runc`.
+  - Runner container creation conditionally injects `Runtime: 'runsc'` into `HostConfig`.
+- **Preserved Runner Container Boundaries & Output Math**:
+  - `ReadonlyRootfs: true`, `CapDrop: ['ALL']`, `SecurityOpt: ['no-new-privileges:true']`.
+  - `NetworkMode: 'none'`, `PidsLimit: 64`, `Memory: 256MB`, `NanoCPUs: 0.5`.
+  - `Tmpfs: { '/tmp': 'rw,noexec,nosuid,size=32m' }`.
+  - **Output Buffer Bound**: Program output is capped at `MAX_OUTPUT_BUFFER_BYTES = 64 KiB` (65,536 bytes). When exceeded, the runner stream is aborted and a 40-byte marker (`\n[Output truncated: exceeded 64KB limit]`) is appended, resulting in a delivered payload of exactly 65,576 bytes.
+  - **Zero socket mounts**: Verified that no runner container mounts `/var/run/docker.sock` or daemon credentials.
+- **Resource Enforcement & Cgroup Driver Analysis**:
+  - **Containerized DinD Limitation**: In `docker:27-dind-rootless`, dockerd reports `Cgroup Driver: none` because `/sys/fs/cgroup` is mounted read-only and no systemd user session manager runs inside Alpine Linux. Dockerd accepts resource flags without error, but per-container kernel OOM and PID limits are not enforced within DinD.
+  - **Outer Boundary Mitigation**: In `infrastructure/docker-compose.yml`, the outer `execution-daemon` container is bounded by the host Docker daemon with `cpus: 1.0`, `mem_limit: 512m`, and `pids_limit: 128`, preventing host resource exhaustion.
+  - **Production Architecture**: Genuine per-runner cgroup enforcement requires a dedicated host-level rootless Docker daemon running under an unprivileged user (e.g. `execution-user`) managed via `systemctl --user`, with systemd cgroup v2 controller delegation (`Delegate=cpu cpuset io memory pids` in `/etc/systemd/system/user@.service.d/delegate.conf`).
+- **Outer-Daemon Seccomp Analysis**:
+  - `docker:27-dind-rootless` requires `seccomp=unconfined` because Docker's default seccomp profile blocks `clone3` / `unshare(CLONE_NEWUSER | CLONE_NEWNS)` and mount operations needed by RootlessKit.
+  - Dedicated host-level rootless Docker daemon eliminates this requirement, running directly on the host kernel where runner containers execute under Docker's default builtin seccomp profile.
+## 14. M1.0 Final Resource-Enforcement Gate Review & Production Fail-Closed Posture
+- **Production Fail-Closed Gate (`SEC-EXEC-08`):**
+  - **Enforcement Policy**: In production (`NODE_ENV === 'production'`), staging, untrusted execution, unknown modes, or development without an explicit profile, `REQUIRE_CGROUP_ENFORCEMENT` defaults strictly to `true`.
+  - **Strict Local-Development-Only Exception**: Setting `ALLOW_UNENFORCED_CGROUPS === 'true'` is accepted **ONLY** when the process is explicitly configured for the trusted local-development profile (`EXECUTION_PROFILE=local-dev-execution` or `local-dev-dind`) under `NODE_ENV=development` or `test`.
+  - **Rejection Across All Non-Local Modes**: The override is strictly rejected for production, staging, untrusted execution, unknown deployment modes, and development without an explicit profile. `NODE_ENV=development` alone is **NOT** treated as proof that an execution environment is trusted.
+  - **Preflight Gate Validation**: `validateWorkerPreflight()` in [`execution/worker/index.js`](file:///d:/AWT_CodeCollab/execution/worker/index.js) queries daemon capabilities on worker startup *before* accepting any BullMQ jobs. If cgroup enforcement fails, the worker process exits immediately with a fatal error; zero jobs are consumed.
+  - **Multi-Vector Controller Verification**: Rather than relying solely on `CgroupDriver !== 'none'`, `verifyCgroupCapabilities()` validates:
+    1. `CgroupDriver !== 'none'` and is non-empty.
+    2. `MemoryLimit === true` (kernel memory cgroup controller active).
+    3. `CPUShares === true` (relative CPU weight scheduling).
+    4. `CpuCfsQuota === true` & `CpuCfsPeriod === true` (kernel CFS bandwidth controller — required for the hard 0.5-CPU cap via `NanoCPUs: 500000000`).
+    5. `PidsLimit === true` (kernel PID controller active).
+    6. Absence of rootless cgroup delegation warnings in `info.Warnings`.
+  - **CFS Bandwidth Quota Requirement**: A daemon reporting `CPUShares: true` but `CpuCfsQuota: false` cannot enforce the 0.5-CPU hard limit. The gate fails closed in enforcement-required mode when CFS quota support is absent or false.
+  - **Host Controller Caveat**: `docker info` flags are necessary capability advertisements from the daemon process, but are not sufficient proof of live host enforcement alone. Live controller availability on the production target host (`cat /sys/fs/cgroup/cgroup.controllers` showing `cpu`, `cpuset`, `memory`, `pids`) must also be satisfied.
+  - If any controller is missing, the worker immediately logs a fatal error listing the specific missing controllers and terminates with exit code 1 without polling or executing jobs.
+  - **Zero Silent Fallback**: The worker never falls back to workstation rootful Docker or unconfigured endpoints.
+
+- **Environment Capability, Residual Risks & Remaining Blockers**:
+  - **Containerized DinD Limitation**: In `docker:27-dind-rootless`, `CgroupDriver: none` and all resource controllers (`MemoryLimit`, `CPUShares`, `CpuCfsQuota`, `CpuCfsPeriod`, `PidsLimit`) report `false`. Per-runner kernel resource limits are non-functional in this mode. Outer container boundaries (`cpus: 1.0`, `mem_limit: 512m`, `pids_limit: 128`) and Node.js wall-clock timeouts (5s) provide defense-in-depth for local development.
+  - **Outer-Daemon Seccomp Residual Risk**: `docker:27-dind-rootless` requires `seccomp=unconfined` because Docker's default seccomp profile denies user namespace creation and RootlessKit mount syscalls. Native host-level rootless Docker under systemd eliminates this risk, executing runners directly under default seccomp.
+  - **Workstation Platform Limitation & Remaining Blocker**:
+    - **No Live Host Rootless Daemon on Workstation**: The developer's Windows/WSL2 workstation contains only the `docker-desktop` appliance distribution (lacking systemd). A native host rootless daemon with cgroup delegation has **NOT** been live-verified on this machine.
+    - **Public Multi-Tenant Execution Blocked**: Public untrusted execution remains strictly blocked until the production deployment target has demonstrated effective CPU, memory, and PID cgroup v2 controller delegation (`cat /sys/fs/cgroup/cgroup.controllers`) and the intended sandbox runtime (e.g. gVisor `runsc`) is registered and verified.
+  - **Host Reachability & Socket Trust Boundary**:
+    - Containerized workers must **never** connect to `tcp://127.0.0.1:2375` (loopback is container-scoped and unreachable).
+    - In containerized Compose environments, the worker connects across `execution-network` to `tcp://execution-daemon:2375` (no published host ports).
+    - For dedicated host-level rootless deployments, the narrowest defensible mechanism is bind-mounting the dedicated user UNIX socket (`/run/user/1001/docker.sock` -> `/var/run/execution/docker.sock`) with mode `0660` restricted to the execution group, avoiding exposed TCP ports entirely.
+  - **Required Host / WSL2 Setup Commands**:
+    ```bash
+    sudo apt-get install -y uidmap dbus-user-session docker-ce-rootless-extras
+    sudo mkdir -p /etc/systemd/system/user@.service.d
+    echo -e "[Service]\nDelegate=cpu cpuset io memory pids" | sudo tee /etc/systemd/system/user@.service.d/delegate.conf
+    sudo systemctl daemon-reload
+    loginctl enable-linger execution-user
+    dockerd-rootless-setuptool.sh install
+    systemctl --user start docker
+    ```
+
+- **Reconciled Verification Totals (Exact Jest Assertion Counts)**:
+  - **Full Standard Test Suite (`npm test`):** **278 passed**, **3 skipped**, **281 total** tests across **21 passed suites**, **1 skipped suite** (`mongo_integration.test.js` skipped by default); 0 failures.
+  - **Exact Category Breakdown**:
+    - `testing/security/`: **107 passed** across 5 suites (`rootless_daemon_runtime.test.js`: 37, `remediation_batch3.test.js`: 28, `remediation_batch2.test.js`: 18, `remediation_batch1.test.js`: 16, `backend_worker_isolation.test.js`: 8).
+    - `testing/frontend/`: **52 passed** across 4 suites (`react_components.test.jsx`: 20, `execution_frontend.test.js`: 17, `auth_frontend.test.js`: 8, `room_frontend.test.js`: 7).
+    - `testing/backend/`: **48 passed** across 3 suites (`auth.test.js`: 19, `rooms.test.js`: 17, `execute.test.js`: 12).
+    - `testing/execution/`: **47 passed** across 4 suites (`execution.test.js`: 13, `python_runner.test.js`: 12, `queue.test.js`: 11, `worker.test.js`: 11).
+    - `testing/realtime/`: **24 passed** across 5 suites (`editor_sync.test.js`: 8, `room_persistence.test.js`: 7, `driver.test.js`: 5, `sockets.test.js`: 3, `presence_activity.test.js`: 1).
+    - `testing/integration/`: **0 passed, 3 skipped** in standard run (opt-in only).
+    - **Sum**: 107 + 52 + 48 + 47 + 24 = **278 passed tests**.
+  - **Separate Opt-In MongoDB Integration Suite (`npm run test:integration:mongo`):** **3 passed tests**, 0 failures against local disposable database.
+  - **Frontend Production Build (`npm run build`):** Clean build via Vite (121 modules transformed, 0 errors).
+  - **Compose Validation:** `docker compose --profile local-dev-execution config` passes cleanly.

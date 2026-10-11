@@ -9,7 +9,11 @@
     "test:frontend": "jest --runInBand testing/frontend",
     "test:realtime": "jest --runInBand testing/realtime",
     "test:integration:mongo": "node testing/integration/run-mongo-integration.js",
-    "build": "npm run build --workspace frontend"
+    "build": "npm run build --workspace frontend",
+    "start:backend": "npm run start --workspace=codecollab-backend",
+    "start:worker": "node execution/worker/index.js",
+    "dev:backend": "npm run dev --workspace=codecollab-backend",
+    "dev:worker": "node execution/worker/index.js"
   },
   "description": "A full-stack web application that lets multiple users create shared coding rooms, communicate via real-time chat, and compile/execute code together in Python, Java, and C++ — all from the browser, with no third-party compiler APIs.",
   "workspaces": [

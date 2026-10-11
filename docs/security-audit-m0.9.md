@@ -378,7 +378,39 @@ graph TD
 | :--- | :--- | :--- |
 | **Local Development** | **READY** | Suitable for local development, automated testing, and UI workflows. Local Docker Compose setup enforces 127.0.0.1 port bindings, least-privilege DB users, and isolated execution worker profile. |
 | **Invite-Only Staging** | **CONDITIONALLY READY** | Suitable for internal invite-only staging **provided that**: (1) strong, non-default credentials are provided in `.env`, (2) the execution worker runs in a restricted network without public port exposure, and (3) all users are trusted team members. |
-| **Public Exposure** | **STRICTLY BLOCKED** | **BLOCKED.** Public exposure cannot be approved while the execution engine relies on Docker socket access (`SEC-INFRA-02`). In a multi-tenant public deployment, compromising an execution worker container with Docker socket access could grant root-equivalent control of the host machine. Public launch requires decoupling execution into rootless Docker or microVMs (gVisor/Firecracker). |
+---
+
+## G. M1.0 Phase A Implementation Addendum: Backend-Worker Separation
+
+- **Scope & Implementation**:
+  - The public backend API server has been fully decoupled from the execution engine. In [`backend/src/index.js`](file:///d:/AWT_CodeCollab/backend/src/index.js) and [`backend/src/services/executionService.js`](file:///d:/AWT_CodeCollab/backend/src/services/executionService.js), in-process worker startup (`executionQueue.startWorker()`) has been completely removed.
+  - A standalone worker entrypoint [`execution/worker/index.js`](file:///d:/AWT_CodeCollab/execution/worker/index.js) has been implemented to independently consume jobs from the Redis BullMQ queue (`codecollab-execution-queue`).
+  - Pure resource limits utilities were extracted into [`execution/engine/resourceLimits.js`](file:///d:/AWT_CodeCollab/execution/engine/resourceLimits.js), allowing the API server to perform memory/timeout validation without importing Dockerode into memory.
+  - In [`infrastructure/docker-compose.yml`](file:///d:/AWT_CodeCollab/infrastructure/docker-compose.yml), `execution-worker` now runs `node execution/worker/index.js` with only Redis network connectivity, dropping all unnecessary MongoDB and JWT secret access.
+- **Remaining Security Boundary & Trust Gaps**:
+  - **Single-Dev Local Mode Only**: The standalone `execution-worker` currently still connects to `/var/run/docker.sock` on the local host. While the public web backend cannot reach the Docker daemon, user code running inside the runner container that breaks out into the worker container could still access the host Docker daemon.
+  - **Public Deployment Status**: **STILL STRICTLY BLOCKED.** Phase A separates the backend from the worker, but does not provide rootless containerization. Public launch remains blocked until Phase B (Rootless Docker / gVisor) is implemented.
+- **Verification**:
+  - Added [`testing/execution/worker.test.js`](file:///d:/AWT_CodeCollab/testing/execution/worker.test.js) (10 tests) and [`testing/security/backend_worker_isolation.test.js`](file:///d:/AWT_CodeCollab/testing/security/backend_worker_isolation.test.js) (7 tests).
+  - Standard Test Run (`npm test`): 20 passed suites, **239 passed tests** (0 failures, 0 open handles).
+  - Frontend Production Build: Validated with `npm run build` (121 modules transformed, 0 errors).
+
+## H. M1.0 Phase B Implementation Addendum: Rootless Execution Daemon & Runtime Isolation
+
+- **Scope & Implementation**:
+  - **Host Docker Socket Removal**: The execution worker no longer mounts or connects to the host `/var/run/docker.sock`. Host socket volume mounts are completely removed from [`infrastructure/docker-compose.yml`](file:///d:/AWT_CodeCollab/infrastructure/docker-compose.yml).
+  - **Rootless Execution Daemon**: Introduced `execution-daemon` service (`docker:27-dind-rootless`) running in user-namespace rootless mode under an unprivileged user (UID 1000). The service publishes **zero** host ports.
+  - **Internal Network Boundary**: Established `execution-network` (`driver: bridge`, `internal: true`) for daemon communication. The public backend is on `app-network` and has **zero** DNS or network access to the daemon. The worker is attached to both `app-network` (to consume Redis jobs) and `execution-network` (to issue container API calls).
+  - **Configurable Daemon Endpoint Resolution**: Created [`execution/engine/dockerConfig.js`](file:///d:/AWT_CodeCollab/execution/engine/dockerConfig.js) to parse and validate `DOCKER_HOST`. Enforces strict fail-closed behavior: blocks direct access to host `/var/run/docker.sock` unless `ALLOW_HOST_DOCKER_SOCKET=true`, rejects wildcard `0.0.0.0` and invalid ports, and forbids implicit fallback to privileged host sockets in production/worker modes.
+  - **Optional gVisor (`runsc`) Support**: Configurable via `CONTAINER_RUNTIME=runsc`. Validates that `runsc` is registered in daemon capabilities and fails closed with an actionable error rather than silently downgrading to `runc`.
+  - **Preserved Runner Sandbox**: Ephemeral runner containers retain all M0.9 security bounds (`ReadonlyRootfs: true`, `CapDrop: ['ALL']`, `SecurityOpt: ['no-new-privileges:true']`, `PidsLimit: 64`, `Memory: 256MB`, `NanoCPUs: 0.5`, `network: 'none'`) and have **zero** Docker sockets or daemon credentials mounted.
+- **Residual Risks & Production Readiness Assessment**:
+  - **Kernel User Namespace Exploits**: Rootless mode prevents host root escalation because container root is mapped to an unprivileged user (UID 1000) on the host kernel. However, host kernel vulnerabilities in unprivileged user namespaces remain a potential attack vector for untrusted multi-tenant workloads until wrapped in a microVM boundary (Firecracker).
+  - **Public Deployment Status**: **CONDITIONALLY READY FOR RESTRICTED MULTI-TENANT BETA.** The public backend can no longer access the Docker daemon, the execution daemon runs rootlessly without published ports, and runner containers cannot mount Docker management sockets. Production clusters should pair this with gVisor (`runsc`) and cgroup v2 resource limits.
+- **Verification**:
+  - Added [`testing/security/rootless_daemon_runtime.test.js`](file:///d:/AWT_CodeCollab/testing/security/rootless_daemon_runtime.test.js) (22 tests passing).
+  - Standard Test Run (`npm test`): 21 passed suites, **261 passed tests** (0 failures, 0 open handles, 1 suite skipped by default).
+  - Frontend Production Build: Validated with `npm run build` (121 modules transformed, 0 errors).
 
 ---
-*End of Security Audit Report (M0.9)*
+*End of Security Audit Report (M0.9 with M1.0 Phase A & B Addenda)*
