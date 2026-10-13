@@ -9,6 +9,7 @@
     "test:frontend": "jest --runInBand testing/frontend",
     "test:realtime": "jest --runInBand testing/realtime",
     "test:integration:mongo": "node testing/integration/run-mongo-integration.js",
+    "eval:enforcement": "node eval/verify-enforcement.js",
     "build": "npm run build --workspace frontend",
     "start:backend": "npm run start --workspace=codecollab-backend",
     "start:worker": "node execution/worker/index.js",
