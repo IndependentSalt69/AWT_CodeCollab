@@ -420,11 +420,178 @@ describe('Resource Enforcement Evaluation Harness Unit Suite (M1.1 Phase 3)', ()
       const preflight = evaluatePreflight(env, {
         connected: true,
         cgroupDriver: 'systemd',
+        cgroupVersion: '2',
         isRootless: true,
       });
 
       expect(preflight.canRunLiveProbes).toBe(true);
       expect(preflight.skipReason).toBeNull();
+    });
+
+    test('permits live probes when daemon confirms cgroup v2 as "2" or "v2"', () => {
+      const env = detectHostEnvironment({ platform: 'linux', kernelRelease: '5.15.0-generic' });
+      const preflight2 = evaluatePreflight(env, {
+        connected: true,
+        cgroupDriver: 'systemd',
+        cgroupVersion: '2',
+        isRootless: true,
+      });
+
+      expect(preflight2.canRunLiveProbes).toBe(true);
+      expect(preflight2.skipReason).toBeNull();
+
+      const preflightV2 = evaluatePreflight(env, {
+        connected: true,
+        cgroupDriver: 'systemd',
+        cgroupVersion: 'v2',
+        isRootless: true,
+      });
+
+      expect(preflightV2.canRunLiveProbes).toBe(true);
+      expect(preflightV2.skipReason).toBeNull();
+    });
+
+    test('skips live probes when daemon cgroupDriver is cgroupfs (M1.1 target requires systemd)', () => {
+      const env = detectHostEnvironment({ platform: 'linux', kernelRelease: '5.15.0-generic' });
+      const preflight = evaluatePreflight(env, {
+        connected: true,
+        cgroupDriver: 'cgroupfs',
+        cgroupVersion: '2',
+        isRootless: true,
+      });
+
+      expect(preflight.canRunLiveProbes).toBe(false);
+      expect(preflight.skipReason).toContain('cgroupfs');
+    });
+
+    test('skips live probes when daemon cgroupVersion is v1 (M1.1 target requires cgroup v2)', () => {
+      const env = detectHostEnvironment({ platform: 'linux', kernelRelease: '5.15.0-generic' });
+      const preflight = evaluatePreflight(env, {
+        connected: true,
+        cgroupDriver: 'systemd',
+        cgroupVersion: '1',
+        isRootless: true,
+      });
+
+      expect(preflight.canRunLiveProbes).toBe(false);
+      expect(preflight.skipReason).toContain('cgroup version is "v1"');
+    });
+
+    test('skips live probes when daemon cgroupVersion is missing in non-strict mode', () => {
+      const env = detectHostEnvironment({ platform: 'linux', kernelRelease: '5.15.0-generic' });
+      const preflight = evaluatePreflight(
+        env,
+        {
+          connected: true,
+          cgroupDriver: 'systemd',
+          // cgroupVersion missing
+          isRootless: true,
+        },
+        { strict: false }
+      );
+
+      expect(preflight.canRunLiveProbes).toBe(false);
+      expect(preflight.skipReason).toContain('unconfirmed or missing');
+      expect(preflight.strictFailure).toBe(false);
+    });
+
+    test('fails preflight when daemon cgroupVersion is missing in strict mode', () => {
+      const env = detectHostEnvironment({ platform: 'linux', kernelRelease: '5.15.0-generic' });
+      const preflight = evaluatePreflight(
+        env,
+        {
+          connected: true,
+          cgroupDriver: 'systemd',
+          // cgroupVersion missing
+          isRootless: true,
+        },
+        { strict: true }
+      );
+
+      expect(preflight.canRunLiveProbes).toBe(false);
+      expect(preflight.skipReason).toContain('unconfirmed or missing');
+      expect(preflight.strictFailure).toBe(true);
+    });
+
+    test('fails closed when daemon cgroupVersion is null, empty, or whitespace', () => {
+      const env = detectHostEnvironment({ platform: 'linux', kernelRelease: '5.15.0-generic' });
+
+      // Null cgroupVersion
+      const nullPreflight = evaluatePreflight(env, {
+        connected: true,
+        cgroupDriver: 'systemd',
+        cgroupVersion: null,
+        isRootless: true,
+      });
+      expect(nullPreflight.canRunLiveProbes).toBe(false);
+      expect(nullPreflight.skipReason).toContain('unconfirmed or missing');
+
+      // Empty string cgroupVersion
+      const emptyPreflight = evaluatePreflight(env, {
+        connected: true,
+        cgroupDriver: 'systemd',
+        cgroupVersion: '',
+        isRootless: true,
+      });
+      expect(emptyPreflight.canRunLiveProbes).toBe(false);
+      expect(emptyPreflight.skipReason).toContain('unconfirmed or missing');
+
+      // Whitespace cgroupVersion
+      const wsPreflight = evaluatePreflight(env, {
+        connected: true,
+        cgroupDriver: 'systemd',
+        cgroupVersion: '   ',
+        isRootless: true,
+      });
+      expect(wsPreflight.canRunLiveProbes).toBe(false);
+      expect(wsPreflight.skipReason).toContain('unconfirmed or missing');
+    });
+
+    test('permits live probes on WSL2 when daemon supports rootless systemd cgroup v2 setup', () => {
+      const env = detectHostEnvironment({
+        platform: 'linux',
+        kernelRelease: '5.15.153.1-microsoft-standard-WSL2',
+      });
+      const preflight = evaluatePreflight(env, {
+        connected: true,
+        cgroupDriver: 'systemd',
+        cgroupVersion: '2',
+        isRootless: true,
+      });
+
+      expect(preflight.canRunLiveProbes).toBe(true);
+      expect(preflight.skipReason).toBeNull();
+      expect(preflight.warnings.some((w) => w.includes('WSL2'))).toBe(true);
+    });
+
+    test('valid WSL2 systemd/cgroup-v2 setup remains eligible for preliminary probes but ineligible for production qualification', () => {
+      const env = detectHostEnvironment({
+        platform: 'linux',
+        kernelRelease: '5.15.153.1-microsoft-standard-WSL2',
+      });
+      const daemon = {
+        connected: true,
+        cgroupDriver: 'systemd',
+        cgroupVersion: '2',
+        isRootless: true,
+        cgroupControllersEnforced: true,
+      };
+
+      // Eligible for preliminary probes
+      const preflight = evaluatePreflight(env, daemon);
+      expect(preflight.canRunLiveProbes).toBe(true);
+      expect(preflight.skipReason).toBeNull();
+      expect(preflight.warnings.some((w) => w.includes('WSL2'))).toBe(true);
+
+      // Ineligible for production qualification
+      const passingResults = {
+        memory: { status: VERDICT_PASS },
+        pid: { status: VERDICT_PASS },
+        cpu: { status: VERDICT_PASS },
+        gvisor: { status: VERDICT_PASS },
+      };
+      const verdict = resolveOverallVerdict(env, daemon, passingResults);
+      expect(verdict).toBe(STATUS_NOT_QUALIFIED);
     });
   });
 
@@ -490,6 +657,8 @@ describe('Resource Enforcement Evaluation Harness Unit Suite (M1.1 Phase 3)', ()
           connected: true,
           isRootless: true,
           cgroupControllersEnforced: true,
+          cgroupDriver: 'systemd',
+          cgroupVersion: '2',
         },
         {
           memory: { status: VERDICT_PASS },
@@ -528,6 +697,8 @@ describe('Resource Enforcement Evaluation Harness Unit Suite (M1.1 Phase 3)', ()
         connected: true,
         isRootless: false, // Rootful daemon!
         cgroupControllersEnforced: true,
+        cgroupDriver: 'systemd',
+        cgroupVersion: '2',
       };
       const results = {
         memory: { status: VERDICT_PASS },
@@ -546,6 +717,8 @@ describe('Resource Enforcement Evaluation Harness Unit Suite (M1.1 Phase 3)', ()
         connected: true,
         isRootless: true,
         cgroupControllersEnforced: false, // Unenforced cgroups!
+        cgroupDriver: 'systemd',
+        cgroupVersion: '2',
       };
       const results = {
         memory: { status: VERDICT_PASS },
@@ -576,11 +749,13 @@ describe('Resource Enforcement Evaluation Harness Unit Suite (M1.1 Phase 3)', ()
     });
 
     test('REGRESSION: disqualifies when daemon says isRootless: false but environment says isRootless: true', () => {
-      const env = { platform: 'linux', isWsl: false, isRootless: true, cgroupControllersEnforced: true, connected: true };
+      const env = { platform: 'linux', isWsl: false, isRootless: true, cgroupControllersEnforced: true, connected: true, cgroupDriver: 'systemd', cgroupVersion: '2' };
       const daemon = {
         connected: true,
         isRootless: false,
         cgroupControllersEnforced: true,
+        cgroupDriver: 'systemd',
+        cgroupVersion: '2',
       };
       const results = {
         memory: { status: VERDICT_PASS },
@@ -594,7 +769,7 @@ describe('Resource Enforcement Evaluation Harness Unit Suite (M1.1 Phase 3)', ()
     });
 
     test('REGRESSION: disqualifies when daemon cgroup enforcement is false or missing while environment says true', () => {
-      const env = { platform: 'linux', isWsl: false, isRootless: true, cgroupControllersEnforced: true, connected: true };
+      const env = { platform: 'linux', isWsl: false, isRootless: true, cgroupControllersEnforced: true, connected: true, cgroupDriver: 'systemd', cgroupVersion: '2' };
       const results = {
         memory: { status: VERDICT_PASS },
         pid: { status: VERDICT_PASS },
@@ -607,6 +782,8 @@ describe('Resource Enforcement Evaluation Harness Unit Suite (M1.1 Phase 3)', ()
         connected: true,
         isRootless: true,
         cgroupControllersEnforced: false,
+        cgroupDriver: 'systemd',
+        cgroupVersion: '2',
       };
       expect(resolveOverallVerdict(env, daemonFalse, results)).toBe(STATUS_NOT_QUALIFIED);
 
@@ -614,16 +791,20 @@ describe('Resource Enforcement Evaluation Harness Unit Suite (M1.1 Phase 3)', ()
       const daemonMissing = {
         connected: true,
         isRootless: true,
+        cgroupDriver: 'systemd',
+        cgroupVersion: '2',
       };
       expect(resolveOverallVerdict(env, daemonMissing, results)).toBe(STATUS_NOT_QUALIFIED);
     });
 
     test('REGRESSION: disqualifies when daemon connected is missing while other fields claim success', () => {
-      const env = { platform: 'linux', isWsl: false, connected: true, isRootless: true, cgroupControllersEnforced: true };
+      const env = { platform: 'linux', isWsl: false, connected: true, isRootless: true, cgroupControllersEnforced: true, cgroupDriver: 'systemd', cgroupVersion: '2' };
       const daemon = {
         // connected is omitted/missing
         isRootless: true,
         cgroupControllersEnforced: true,
+        cgroupDriver: 'systemd',
+        cgroupVersion: '2',
       };
       const results = {
         memory: { status: VERDICT_PASS },
@@ -678,12 +859,215 @@ describe('Resource Enforcement Evaluation Harness Unit Suite (M1.1 Phase 3)', ()
       };
 
       // Mock Windows host with all daemon and probe fields passing
-      const winEnv = { platform: 'win32', isWsl: false, connected: true, isRootless: true, cgroupControllersEnforced: true };
+      const winEnv = { platform: 'win32', isWsl: false, connected: true, isRootless: true, cgroupControllersEnforced: true, cgroupDriver: 'systemd', cgroupVersion: '2' };
       expect(resolveOverallVerdict(winEnv, daemonPassing, resultsPassing)).toBe(STATUS_NOT_QUALIFIED);
 
       // Mock WSL2 host with all daemon and probe fields passing
-      const wslEnv = { platform: 'linux', isWsl: true, connected: true, isRootless: true, cgroupControllersEnforced: true };
+      const wslEnv = { platform: 'linux', isWsl: true, connected: true, isRootless: true, cgroupControllersEnforced: true, cgroupDriver: 'systemd', cgroupVersion: '2' };
       expect(resolveOverallVerdict(wslEnv, daemonPassing, resultsPassing)).toBe(STATUS_NOT_QUALIFIED);
+    });
+
+    test('REGRESSION: disqualifies cgroupfs / v1 combination even with passing controls', () => {
+      const env = { platform: 'linux', isWsl: false };
+      const daemon = {
+        connected: true,
+        isRootless: true,
+        cgroupControllersEnforced: true,
+        cgroupDriver: 'cgroupfs',
+        cgroupVersion: '1',
+      };
+      const results = {
+        memory: { status: VERDICT_PASS },
+        pid: { status: VERDICT_PASS },
+        cpu: { status: VERDICT_PASS },
+        gvisor: { status: VERDICT_PASS },
+      };
+
+      expect(resolveOverallVerdict(env, daemon, results)).toBe(STATUS_NOT_QUALIFIED);
+    });
+
+    test('REGRESSION: disqualifies systemd / v1 combination even with passing controls', () => {
+      const env = { platform: 'linux', isWsl: false };
+      const daemon = {
+        connected: true,
+        isRootless: true,
+        cgroupControllersEnforced: true,
+        cgroupDriver: 'systemd',
+        cgroupVersion: '1',
+      };
+      const results = {
+        memory: { status: VERDICT_PASS },
+        pid: { status: VERDICT_PASS },
+        cpu: { status: VERDICT_PASS },
+        gvisor: { status: VERDICT_PASS },
+      };
+
+      expect(resolveOverallVerdict(env, daemon, results)).toBe(STATUS_NOT_QUALIFIED);
+    });
+
+    test('REGRESSION: disqualifies cgroupfs / v2 combination even with passing controls', () => {
+      const env = { platform: 'linux', isWsl: false };
+      const daemon = {
+        connected: true,
+        isRootless: true,
+        cgroupControllersEnforced: true,
+        cgroupDriver: 'cgroupfs',
+        cgroupVersion: '2',
+      };
+      const results = {
+        memory: { status: VERDICT_PASS },
+        pid: { status: VERDICT_PASS },
+        cpu: { status: VERDICT_PASS },
+        gvisor: { status: VERDICT_PASS },
+      };
+
+      expect(resolveOverallVerdict(env, daemon, results)).toBe(STATUS_NOT_QUALIFIED);
+    });
+
+    test('REGRESSION: disqualifies when daemon cgroupDriver is missing', () => {
+      const env = { platform: 'linux', isWsl: false, cgroupDriver: 'systemd', cgroupVersion: '2' };
+      const daemon = {
+        connected: true,
+        isRootless: true,
+        cgroupControllersEnforced: true,
+        cgroupVersion: '2',
+        // cgroupDriver missing
+      };
+      const results = {
+        memory: { status: VERDICT_PASS },
+        pid: { status: VERDICT_PASS },
+        cpu: { status: VERDICT_PASS },
+        gvisor: { status: VERDICT_PASS },
+      };
+
+      expect(resolveOverallVerdict(env, daemon, results)).toBe(STATUS_NOT_QUALIFIED);
+    });
+
+    test('REGRESSION: disqualifies when daemon cgroupVersion is missing', () => {
+      const env = { platform: 'linux', isWsl: false, cgroupDriver: 'systemd', cgroupVersion: '2' };
+      const daemon = {
+        connected: true,
+        isRootless: true,
+        cgroupControllersEnforced: true,
+        cgroupDriver: 'systemd',
+        // cgroupVersion missing
+      };
+      const results = {
+        memory: { status: VERDICT_PASS },
+        pid: { status: VERDICT_PASS },
+        cpu: { status: VERDICT_PASS },
+        gvisor: { status: VERDICT_PASS },
+      };
+
+      expect(resolveOverallVerdict(env, daemon, results)).toBe(STATUS_NOT_QUALIFIED);
+    });
+
+    test('REGRESSION: disqualifies when daemon cgroupDriver contradicts environment cgroupDriver', () => {
+      const env = {
+        platform: 'linux',
+        isWsl: false,
+        cgroupDriver: 'cgroupfs',
+        cgroupVersion: '2',
+        connected: true,
+        isRootless: true,
+        cgroupControllersEnforced: true,
+      };
+      const daemon = {
+        connected: true,
+        isRootless: true,
+        cgroupControllersEnforced: true,
+        cgroupDriver: 'systemd',
+        cgroupVersion: '2',
+      };
+      const results = {
+        memory: { status: VERDICT_PASS },
+        pid: { status: VERDICT_PASS },
+        cpu: { status: VERDICT_PASS },
+        gvisor: { status: VERDICT_PASS },
+      };
+
+      expect(resolveOverallVerdict(env, daemon, results)).toBe(STATUS_NOT_QUALIFIED);
+    });
+
+    test('REGRESSION: disqualifies when daemon cgroupVersion contradicts environment cgroupVersion', () => {
+      const env = {
+        platform: 'linux',
+        isWsl: false,
+        cgroupDriver: 'systemd',
+        cgroupVersion: '1',
+        connected: true,
+        isRootless: true,
+        cgroupControllersEnforced: true,
+      };
+      const daemon = {
+        connected: true,
+        isRootless: true,
+        cgroupControllersEnforced: true,
+        cgroupDriver: 'systemd',
+        cgroupVersion: '2',
+      };
+      const results = {
+        memory: { status: VERDICT_PASS },
+        pid: { status: VERDICT_PASS },
+        cpu: { status: VERDICT_PASS },
+        gvisor: { status: VERDICT_PASS },
+      };
+
+      expect(resolveOverallVerdict(env, daemon, results)).toBe(STATUS_NOT_QUALIFIED);
+    });
+
+    test('REGRESSION: disqualifies when daemon is cgroupfs but environment says systemd', () => {
+      const env = {
+        platform: 'linux',
+        isWsl: false,
+        cgroupDriver: 'systemd',
+        cgroupVersion: '2',
+        connected: true,
+        isRootless: true,
+        cgroupControllersEnforced: true,
+      };
+      const daemon = {
+        connected: true,
+        isRootless: true,
+        cgroupControllersEnforced: true,
+        cgroupDriver: 'cgroupfs',
+        cgroupVersion: '2',
+      };
+      const results = {
+        memory: { status: VERDICT_PASS },
+        pid: { status: VERDICT_PASS },
+        cpu: { status: VERDICT_PASS },
+        gvisor: { status: VERDICT_PASS },
+      };
+
+      expect(resolveOverallVerdict(env, daemon, results)).toBe(STATUS_NOT_QUALIFIED);
+    });
+
+    test('REGRESSION: disqualifies when daemon is v1 but environment says 2', () => {
+      const env = {
+        platform: 'linux',
+        isWsl: false,
+        cgroupDriver: 'systemd',
+        cgroupVersion: '2',
+        connected: true,
+        isRootless: true,
+        cgroupControllersEnforced: true,
+      };
+      const daemon = {
+        connected: true,
+        isRootless: true,
+        cgroupControllersEnforced: true,
+        cgroupDriver: 'systemd',
+        cgroupVersion: '1',
+      };
+      const results = {
+        memory: { status: VERDICT_PASS },
+        pid: { status: VERDICT_PASS },
+        cpu: { status: VERDICT_PASS },
+        gvisor: { status: VERDICT_PASS },
+      };
+
+      expect(resolveOverallVerdict(env, daemon, results)).toBe(STATUS_NOT_QUALIFIED);
     });
   });
 

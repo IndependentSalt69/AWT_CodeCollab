@@ -456,11 +456,13 @@ function classifyGvisorIntegration(evidence = {}) {
  * Explicit qualification rules:
  * A dedicated Linux production deployment is qualified ONLY when:
  * 1. Platform is native Linux (not Windows, not WSL2).
- * 2. Connected Docker daemon is explicitly rootless (isRootless === true).
+ * 2. Connected Docker daemon is explicitly rootless (daemon.isRootless === true).
  * 3. Cgroup v2 controllers are enforced under systemd (daemon.cgroupControllersEnforced === true).
- * 4. Memory, PID, CPU, and gVisor checks all evaluate to PASS.
- * 5. Daemon connection is active and validated (daemon.connected === true).
- * 6. Environment metadata does not contradict daemon capability evidence.
+ * 4. Connected Docker daemon uses the systemd cgroup driver (daemon.cgroupDriver === 'systemd').
+ * 5. Connected Docker daemon runs cgroup v2 (daemon.cgroupVersion === '2').
+ * 6. Memory, PID, CPU, and gVisor checks all evaluate to PASS.
+ * 7. Daemon connection is active and validated (daemon.connected === true).
+ * 8. Environment metadata does not contradict daemon capability evidence.
  *
  * @param {Object} environment
  * @param {Object} [daemonOrResults] - Docker daemon probe result, or testResults if 2 args
@@ -505,11 +507,37 @@ function resolveOverallVerdict(environment = {}, daemonOrResults = {}, maybeResu
     ) {
       return STATUS_NOT_QUALIFIED;
     }
+    if (
+      environment.cgroupDriver !== undefined &&
+      String(environment.cgroupDriver).trim().toLowerCase() !== String(daemon.cgroupDriver || '').trim().toLowerCase()
+    ) {
+      return STATUS_NOT_QUALIFIED;
+    }
+    if (
+      environment.cgroupVersion !== undefined &&
+      String(environment.cgroupVersion).trim().replace(/^v/i, '') !== String(daemon.cgroupVersion || '').trim().replace(/^v/i, '')
+    ) {
+      return STATUS_NOT_QUALIFIED;
+    }
   }
 
   // Production qualification strictly requires genuine daemon capability evidence:
   // connected === true, isRootless === true, and cgroupControllersEnforced === true.
   if (daemon.connected !== true || daemon.isRootless !== true || daemon.cgroupControllersEnforced !== true) {
+    return STATUS_NOT_QUALIFIED;
+  }
+
+  // Require daemon-reported cgroup driver to be 'systemd'
+  const daemonDriver = typeof daemon.cgroupDriver === 'string' ? daemon.cgroupDriver.trim().toLowerCase() : '';
+  if (daemonDriver !== 'systemd') {
+    return STATUS_NOT_QUALIFIED;
+  }
+
+  // Require daemon-reported cgroup version to be '2'
+  const daemonVersion = daemon.cgroupVersion !== undefined && daemon.cgroupVersion !== null
+    ? String(daemon.cgroupVersion).trim().replace(/^v/i, '')
+    : '';
+  if (daemonVersion !== '2') {
     return STATUS_NOT_QUALIFIED;
   }
 

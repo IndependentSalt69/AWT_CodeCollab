@@ -194,12 +194,15 @@ function evaluatePreflight(environment, daemon, options = {}) {
     };
   }
 
-  // Case 3: CgroupDriver is 'none' (e.g. nested DinD without cgroups)
-  if (daemon.cgroupDriver === 'none' || daemon.cgroupDriver === '') {
+  // Case 3: CgroupDriver check - M1.1 target requires 'systemd'
+  const cgroupDriver = typeof daemon.cgroupDriver === 'string' ? daemon.cgroupDriver.trim().toLowerCase() : '';
+  if (cgroupDriver !== 'systemd') {
     return {
       canRunLiveProbes: false,
-      skipReason: 'Docker daemon cgroup driver is "none". Per-container kernel limits are not enforced by the connected daemon.',
-      warnings: ['Connected daemon has no active cgroup driver. Run with systemd cgroup driver.'],
+      skipReason: cgroupDriver === 'none' || !cgroupDriver
+        ? 'Docker daemon cgroup driver is "none". Per-container kernel limits are not enforced by the connected daemon.'
+        : `Docker daemon cgroup driver is "${daemon.cgroupDriver}". M1.1 resource enforcement requires the systemd cgroup driver.`,
+      warnings: [`Connected daemon cgroup driver is "${daemon.cgroupDriver || 'none'}". Run with systemd cgroup driver.`],
       strictFailure: strict,
     };
   }
@@ -214,7 +217,32 @@ function evaluatePreflight(environment, daemon, options = {}) {
     };
   }
 
-  // Case 5: WSL2 environment notice
+  // Case 5: CgroupVersion check - M1.1 target requires confirmed cgroup v2
+  const rawVersion = daemon.cgroupVersion !== undefined && daemon.cgroupVersion !== null
+    ? String(daemon.cgroupVersion).trim()
+    : '';
+  const normalizedVersion = rawVersion.replace(/^v/i, '');
+
+  if (normalizedVersion !== '2') {
+    const isMissing = rawVersion === '';
+    const displayVersion = isMissing
+      ? ''
+      : (rawVersion.toLowerCase().startsWith('v') ? rawVersion : `v${rawVersion}`);
+    return {
+      canRunLiveProbes: false,
+      skipReason: isMissing
+        ? 'Docker daemon cgroup version is unconfirmed or missing. M1.1 resource enforcement requires verified cgroup v2.'
+        : `Docker daemon cgroup version is "${displayVersion}". M1.1 resource enforcement requires cgroup v2.`,
+      warnings: [
+        isMissing
+          ? 'Connected daemon cgroup version could not be confirmed as cgroup v2. Cgroup v2 is required for resource enforcement.'
+          : `Connected daemon is running cgroup ${displayVersion}. Cgroup v2 is required for production qualification.`,
+      ],
+      strictFailure: strict,
+    };
+  }
+
+  // Case 6: WSL2 environment notice
   if (environment.isWsl) {
     warnings.push('WSL2 environment detected. Live probes demonstrate cgroup v2 mechanics, but WSL2 does not qualify a dedicated Linux production release.');
   }
