@@ -1,3 +1,15 @@
+## Current Qualification Status (2026-10-15)
+
+> The detailed audit below is a historical snapshot dated 2026-10-08. Some implementation claims predate subsequent milestones and must be verified against the current repository.
+
+- **M1.1 harness and qualification gate:** implemented; the focused `testing/security/resource_enforcement_harness.test.js` suite last passed 67/67 tests.
+- **WSL2 resource probes:** memory OOM, PID-limit, and CPU CFS-quota probes recorded passing in the October 13 validation run.
+- **gVisor:** starting a `runsc` container in the tested WSL2 setup remains blocked by `Interactive authentication required`.
+- **Release status:** `NOT_QUALIFIED_FOR_PRODUCTION`. Keep public untrusted multi-tenant execution blocked until the intended Linux target passes the full resource-enforcement and gVisor qualification.
+
+WSL2 results are environment-specific evidence, not proof that the intended production target is qualified. Inspect the latest validation reports and rerun relevant tests before making release decisions.
+
+---
 # Execution Subsystem Status Audit
 
 **Current Local Time:** 2026-10-08  
