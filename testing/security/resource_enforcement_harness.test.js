@@ -34,6 +34,10 @@ const {
   probeGvisorIntegration,
 } = require('../../eval/resource-probes');
 const { runHarness } = require('../../eval/verify-enforcement');
+// Synthetic application evidence for verdict unit fixtures, not live qualification.
+const applicationEvidence = Object.fromEntries(
+  ['timeout', 'output', 'cleanup', 'authorization', 'roomIsolation'].map(name => [name, { status: VERDICT_PASS }])
+);
 
 describe('Resource Enforcement Evaluation Harness Unit Suite (M1.1 Phase 3)', () => {
   // --------------------------------------------------------------------------
@@ -45,6 +49,7 @@ describe('Resource Enforcement Evaluation Harness Unit Suite (M1.1 Phase 3)', ()
         configuredLimitBytes: 128 * 1024 * 1024,
         exitCode: 137,
         oomKilled: true,
+        observedMemoryMax: '134217728',
         memoryEventsDelta: { oom: 1, oom_kill: 1 },
         stdout: 'MEM_PROBE_START\nALLOCATED_16MB\nALLOCATED_32MB\nALLOCATED_48MB\n',
       });
@@ -62,6 +67,7 @@ describe('Resource Enforcement Evaluation Harness Unit Suite (M1.1 Phase 3)', ()
         configuredLimitBytes: 128 * 1024 * 1024,
         exitCode: 0, // Honest container exit code
         oomKilled: true, // Docker recorded OOM
+        observedMemoryMax: '134217728',
         memoryEventsDelta: { oom: 1, oom_kill: 1 }, // cgroup counter incremented
         stdout: 'MEM_PROBE_START\nALLOCATED_16MB\nALLOCATED_128MB\n',
       });
@@ -238,6 +244,99 @@ describe('Resource Enforcement Evaluation Harness Unit Suite (M1.1 Phase 3)', ()
       expect(result.status).toBe(VERDICT_UNSUPPORTED);
       expect(result.explanation).toContain('pids.events metrics are inaccessible or unsupported');
     });
+
+    test('REGRESSION: classifies as FAIL when child process reaping is partial', () => {
+      const result = classifyPidEnforcement({
+        configuredPidsLimit: 10,
+        observedPidsMax: '10',
+        childrenSpawned: 9,
+        childrenReaped: 8,
+        forkBlocked: true,
+        pidsEventsDelta: { max: 1 },
+        exitCode: 1,
+        stdout: 'PID_PROBE_START\nCGROUP_PIDS_MAX:10\nFORK_BLOCKED_AT_9_CHILDREN: [Errno 11] Resource temporarily unavailable\nCGROUP_PIDS_EVENTS_DELTA:max=1\nREAPED_8_CHILDREN\nREAP_INCOMPLETE:spawned=9,reaped=8\n',
+      });
+
+      expect(result.status).toBe(VERDICT_FAIL);
+      expect(result.explanation).toContain('every child was reaped');
+    });
+
+    test('REGRESSION: classifies as FAIL when child process reaping evidence is missing', () => {
+      const resultOmitted = classifyPidEnforcement({
+        configuredPidsLimit: 10,
+        observedPidsMax: '10',
+        childrenSpawned: 9,
+        forkBlocked: true,
+        pidsEventsDelta: { max: 1 },
+        exitCode: 0,
+      });
+      expect(resultOmitted.status).toBe(VERDICT_FAIL);
+      expect(resultOmitted.explanation).toContain('every child was reaped');
+
+      const resultNull = classifyPidEnforcement({
+        configuredPidsLimit: 10,
+        observedPidsMax: '10',
+        childrenSpawned: 9,
+        childrenReaped: null,
+        forkBlocked: true,
+        pidsEventsDelta: { max: 1 },
+        exitCode: 0,
+      });
+      expect(resultNull.status).toBe(VERDICT_FAIL);
+      expect(resultNull.explanation).toContain('every child was reaped');
+    });
+
+    test('REGRESSION: classifies as FAIL when child process reaping evidence is invalid', () => {
+      for (const invalidReaped of ['9', NaN, -1, 8.5]) {
+        const result = classifyPidEnforcement({
+          configuredPidsLimit: 10,
+          observedPidsMax: '10',
+          childrenSpawned: 9,
+          childrenReaped: invalidReaped,
+          forkBlocked: true,
+          pidsEventsDelta: { max: 1 },
+          exitCode: 0,
+        });
+        expect(result.status).toBe(VERDICT_FAIL);
+        expect(result.explanation).toContain('every child was reaped');
+      }
+    });
+
+    test('REGRESSION: classifies as FAIL when cleanup failures are recorded even if reaped count matches', () => {
+      const result = classifyPidEnforcement({
+        configuredPidsLimit: 10,
+        observedPidsMax: '10',
+        childrenSpawned: 9,
+        childrenReaped: 9,
+        cleanupFailures: ['waitpid(999):unexpected_pid=0'],
+        forkBlocked: true,
+        pidsEventsDelta: { max: 1 },
+        exitCode: 1,
+        stdout: 'PID_PROBE_START\nCGROUP_PIDS_MAX:10\nFORK_BLOCKED_AT_9_CHILDREN: [Errno 11] Resource temporarily unavailable\nCGROUP_PIDS_EVENTS_DELTA:max=1\nREAPED_9_CHILDREN\nCLEANUP_FAILURES:waitpid(999):unexpected_pid=0\n',
+      });
+
+      expect(result.status).toBe(VERDICT_FAIL);
+      expect(result.explanation).toContain('every child was reaped');
+    });
+
+    test('REGRESSION: classifies as PASS when all children are verified reaped without cleanup failures', () => {
+      const result = classifyPidEnforcement({
+        configuredPidsLimit: 10,
+        observedPidsMax: '10',
+        childrenSpawned: 9,
+        childrenReaped: 9,
+        cleanupFailures: [],
+        forkBlocked: true,
+        pidsEventsDelta: { max: 1 },
+        exitCode: 0,
+        stdout: 'PID_PROBE_START\nCGROUP_PIDS_MAX:10\nFORK_BLOCKED_AT_9_CHILDREN: [Errno 11] Resource temporarily unavailable\nCGROUP_PIDS_EVENTS_DELTA:max=1\nREAPED_9_CHILDREN\n',
+      });
+
+      expect(result.status).toBe(VERDICT_PASS);
+      expect(result.forkBlocked).toBe(true);
+      expect(result.childrenSpawned).toBe(9);
+      expect(result.explanation).toContain('Reaped 9 children cleanly');
+    });
   });
 
   // --------------------------------------------------------------------------
@@ -249,6 +348,8 @@ describe('Resource Enforcement Evaluation Harness Unit Suite (M1.1 Phase 3)', ()
         requestedNanoCPUs: 500000000,
         wallSeconds: 2.0,
         processCpuSeconds: 1.024,
+        observedCpuMax: '50000 100000',
+        exitCode: 0,
         cpuStatDelta: { nr_throttled: 28, throttled_usec: 980000 },
         stdout: 'CPU_PROBE_START\nWALL_TIME:2.0000\nCPU_TIME:1.0240\nCPU_RATIO:0.5120\n',
       });
@@ -315,6 +416,7 @@ describe('Resource Enforcement Evaluation Harness Unit Suite (M1.1 Phase 3)', ()
         runtimeRegistered: true,
         containerStarted: true,
         procVersion: 'Linux version 4.4.0 (gVisor release-20240101.0)',
+        exitCode: 0,
         stdout: 'PROC_VERSION:Linux version 4.4.0 (gVisor release-20240101.0)\n',
       });
 
@@ -589,6 +691,7 @@ describe('Resource Enforcement Evaluation Harness Unit Suite (M1.1 Phase 3)', ()
         pid: { status: VERDICT_PASS },
         cpu: { status: VERDICT_PASS },
         gvisor: { status: VERDICT_PASS },
+        ...applicationEvidence,
       };
       const verdict = resolveOverallVerdict(env, daemon, passingResults);
       expect(verdict).toBe(STATUS_NOT_QUALIFIED);
@@ -607,6 +710,7 @@ describe('Resource Enforcement Evaluation Harness Unit Suite (M1.1 Phase 3)', ()
           pid: { status: VERDICT_PASS },
           cpu: { status: VERDICT_PASS },
           gvisor: { status: VERDICT_PASS },
+          ...applicationEvidence,
         }
       );
 
@@ -621,6 +725,7 @@ describe('Resource Enforcement Evaluation Harness Unit Suite (M1.1 Phase 3)', ()
           pid: { status: VERDICT_PASS },
           cpu: { status: VERDICT_PASS },
           gvisor: { status: VERDICT_PASS },
+          ...applicationEvidence,
         }
       );
 
@@ -643,10 +748,42 @@ describe('Resource Enforcement Evaluation Harness Unit Suite (M1.1 Phase 3)', ()
           pid: { status: VERDICT_PASS },
           cpu: { status: VERDICT_PASS },
           gvisor: { status: VERDICT_PASS },
+          ...applicationEvidence,
         }
       );
 
       expect(verdict).toBe(STATUS_QUALIFIED);
+    });
+
+    test('REGRESSION: disqualifies when PID probe fails due to partial or missing child reaping', () => {
+      const env = { platform: 'linux', isWsl: false };
+      const daemon = {
+        connected: true,
+        isRootless: true,
+        cgroupControllersEnforced: true,
+        cgroupDriver: 'systemd',
+        cgroupVersion: '2',
+      };
+      const partialReapEvidence = classifyPidEnforcement({
+        configuredPidsLimit: 10,
+        observedPidsMax: '10',
+        childrenSpawned: 9,
+        childrenReaped: 8,
+        forkBlocked: true,
+        pidsEventsDelta: { max: 1 },
+        exitCode: 1,
+      });
+      expect(partialReapEvidence.status).toBe(VERDICT_FAIL);
+
+      const results = {
+        memory: { status: VERDICT_PASS },
+        pid: partialReapEvidence,
+        cpu: { status: VERDICT_PASS },
+        gvisor: { status: VERDICT_PASS },
+        ...applicationEvidence,
+      };
+
+      expect(resolveOverallVerdict(env, daemon, results)).toBe(STATUS_NOT_QUALIFIED);
     });
 
     test('Native Linux target does NOT qualify if gVisor is BLOCKED or FAILED', () => {
@@ -685,6 +822,7 @@ describe('Resource Enforcement Evaluation Harness Unit Suite (M1.1 Phase 3)', ()
         pid: { status: VERDICT_PASS },
         cpu: { status: VERDICT_PASS },
         gvisor: { status: VERDICT_PASS },
+        ...applicationEvidence,
       };
 
       const verdict = resolveOverallVerdict(env, daemon, results);
@@ -705,6 +843,7 @@ describe('Resource Enforcement Evaluation Harness Unit Suite (M1.1 Phase 3)', ()
         pid: { status: VERDICT_PASS },
         cpu: { status: VERDICT_PASS },
         gvisor: { status: VERDICT_PASS },
+        ...applicationEvidence,
       };
 
       const verdict = resolveOverallVerdict(env, daemon, results);
@@ -725,6 +864,7 @@ describe('Resource Enforcement Evaluation Harness Unit Suite (M1.1 Phase 3)', ()
         pid: { status: VERDICT_PASS },
         cpu: { status: VERDICT_PASS },
         gvisor: { status: VERDICT_PASS },
+        ...applicationEvidence,
       };
 
       const verdict = resolveOverallVerdict(env, daemon, results);
@@ -742,6 +882,7 @@ describe('Resource Enforcement Evaluation Harness Unit Suite (M1.1 Phase 3)', ()
         pid: { status: VERDICT_PASS },
         cpu: { status: VERDICT_PASS },
         gvisor: { status: VERDICT_PASS },
+        ...applicationEvidence,
       };
 
       const verdict = resolveOverallVerdict(env, daemon, results);
@@ -762,6 +903,7 @@ describe('Resource Enforcement Evaluation Harness Unit Suite (M1.1 Phase 3)', ()
         pid: { status: VERDICT_PASS },
         cpu: { status: VERDICT_PASS },
         gvisor: { status: VERDICT_PASS },
+        ...applicationEvidence,
       };
 
       const verdict = resolveOverallVerdict(env, daemon, results);
@@ -775,6 +917,7 @@ describe('Resource Enforcement Evaluation Harness Unit Suite (M1.1 Phase 3)', ()
         pid: { status: VERDICT_PASS },
         cpu: { status: VERDICT_PASS },
         gvisor: { status: VERDICT_PASS },
+        ...applicationEvidence,
       };
 
       // Case A: daemon explicitly has cgroupControllersEnforced: false
@@ -811,6 +954,7 @@ describe('Resource Enforcement Evaluation Harness Unit Suite (M1.1 Phase 3)', ()
         pid: { status: VERDICT_PASS },
         cpu: { status: VERDICT_PASS },
         gvisor: { status: VERDICT_PASS },
+        ...applicationEvidence,
       };
 
       const verdict = resolveOverallVerdict(env, daemon, results);
@@ -837,6 +981,7 @@ describe('Resource Enforcement Evaluation Harness Unit Suite (M1.1 Phase 3)', ()
         pid: { status: VERDICT_PASS },
         cpu: { status: VERDICT_PASS },
         gvisor: { status: VERDICT_PASS },
+        ...applicationEvidence,
       };
 
       const verdict = resolveOverallVerdict(env, daemon, results);
@@ -856,6 +1001,7 @@ describe('Resource Enforcement Evaluation Harness Unit Suite (M1.1 Phase 3)', ()
         pid: { status: VERDICT_PASS },
         cpu: { status: VERDICT_PASS },
         gvisor: { status: VERDICT_PASS },
+        ...applicationEvidence,
       };
 
       // Mock Windows host with all daemon and probe fields passing
@@ -881,6 +1027,7 @@ describe('Resource Enforcement Evaluation Harness Unit Suite (M1.1 Phase 3)', ()
         pid: { status: VERDICT_PASS },
         cpu: { status: VERDICT_PASS },
         gvisor: { status: VERDICT_PASS },
+        ...applicationEvidence,
       };
 
       expect(resolveOverallVerdict(env, daemon, results)).toBe(STATUS_NOT_QUALIFIED);
@@ -900,6 +1047,7 @@ describe('Resource Enforcement Evaluation Harness Unit Suite (M1.1 Phase 3)', ()
         pid: { status: VERDICT_PASS },
         cpu: { status: VERDICT_PASS },
         gvisor: { status: VERDICT_PASS },
+        ...applicationEvidence,
       };
 
       expect(resolveOverallVerdict(env, daemon, results)).toBe(STATUS_NOT_QUALIFIED);
@@ -919,6 +1067,7 @@ describe('Resource Enforcement Evaluation Harness Unit Suite (M1.1 Phase 3)', ()
         pid: { status: VERDICT_PASS },
         cpu: { status: VERDICT_PASS },
         gvisor: { status: VERDICT_PASS },
+        ...applicationEvidence,
       };
 
       expect(resolveOverallVerdict(env, daemon, results)).toBe(STATUS_NOT_QUALIFIED);
@@ -938,6 +1087,7 @@ describe('Resource Enforcement Evaluation Harness Unit Suite (M1.1 Phase 3)', ()
         pid: { status: VERDICT_PASS },
         cpu: { status: VERDICT_PASS },
         gvisor: { status: VERDICT_PASS },
+        ...applicationEvidence,
       };
 
       expect(resolveOverallVerdict(env, daemon, results)).toBe(STATUS_NOT_QUALIFIED);
@@ -957,6 +1107,7 @@ describe('Resource Enforcement Evaluation Harness Unit Suite (M1.1 Phase 3)', ()
         pid: { status: VERDICT_PASS },
         cpu: { status: VERDICT_PASS },
         gvisor: { status: VERDICT_PASS },
+        ...applicationEvidence,
       };
 
       expect(resolveOverallVerdict(env, daemon, results)).toBe(STATUS_NOT_QUALIFIED);
@@ -984,6 +1135,7 @@ describe('Resource Enforcement Evaluation Harness Unit Suite (M1.1 Phase 3)', ()
         pid: { status: VERDICT_PASS },
         cpu: { status: VERDICT_PASS },
         gvisor: { status: VERDICT_PASS },
+        ...applicationEvidence,
       };
 
       expect(resolveOverallVerdict(env, daemon, results)).toBe(STATUS_NOT_QUALIFIED);
@@ -1011,6 +1163,7 @@ describe('Resource Enforcement Evaluation Harness Unit Suite (M1.1 Phase 3)', ()
         pid: { status: VERDICT_PASS },
         cpu: { status: VERDICT_PASS },
         gvisor: { status: VERDICT_PASS },
+        ...applicationEvidence,
       };
 
       expect(resolveOverallVerdict(env, daemon, results)).toBe(STATUS_NOT_QUALIFIED);
@@ -1038,6 +1191,7 @@ describe('Resource Enforcement Evaluation Harness Unit Suite (M1.1 Phase 3)', ()
         pid: { status: VERDICT_PASS },
         cpu: { status: VERDICT_PASS },
         gvisor: { status: VERDICT_PASS },
+        ...applicationEvidence,
       };
 
       expect(resolveOverallVerdict(env, daemon, results)).toBe(STATUS_NOT_QUALIFIED);
@@ -1065,6 +1219,7 @@ describe('Resource Enforcement Evaluation Harness Unit Suite (M1.1 Phase 3)', ()
         pid: { status: VERDICT_PASS },
         cpu: { status: VERDICT_PASS },
         gvisor: { status: VERDICT_PASS },
+        ...applicationEvidence,
       };
 
       expect(resolveOverallVerdict(env, daemon, results)).toBe(STATUS_NOT_QUALIFIED);
@@ -1245,6 +1400,11 @@ describe('Resource Enforcement Evaluation Harness Unit Suite (M1.1 Phase 3)', ()
 
       expect(pidScript).toContain('print("CGROUP_PIDS_EVENTS_BEFORE:" + ",".join(ev_before.splitlines()))');
       expect(pidScript).toContain('print("CGROUP_PIDS_EVENTS_AFTER:" + ",".join(ev_after.splitlines()))');
+      expect(pidScript).toContain('wpid, _ = os.waitpid(pid, 0)');
+      expect(pidScript).toContain('if wpid == pid:');
+      expect(pidScript).toContain('reaped += 1');
+      expect(pidScript).toContain('CLEANUP_FAILURES:');
+      expect(pidScript).toContain('REAP_INCOMPLETE:');
 
       expect(cpuScript).toContain('print("CGROUP_CPU_STAT_BEFORE:" + ",".join(st_before.splitlines()))');
       expect(cpuScript).toContain('print("CGROUP_CPU_STAT_AFTER:" + ",".join(st_after.splitlines()))');

@@ -55,9 +55,9 @@ class EnforcementTracker {
         const container = dockerClient.getContainer(id);
         await container.remove({ force: true });
         this.untrack(id);
-      } catch (_) {
-        // Container may already be removed or stopped
-        this.untrack(id);
+      } catch (err) {
+        // Preserve failed removals for retry and qualification evidence.
+        if (err.statusCode === 404) this.untrack(id);
       }
     }
   }
@@ -107,6 +107,7 @@ async function executeProbeContainer(dockerClient, tracker, config = {}) {
         'codecollab.eval.probe': probeName,
       },
       HostConfig: {
+        Runtime: 'runsc', // Every qualification probe uses the required isolation runtime.
         ReadonlyRootfs: true,
         CapDrop: ['ALL'],
         SecurityOpt: ['no-new-privileges:true'],
@@ -197,8 +198,8 @@ async function executeProbeContainer(dockerClient, tracker, config = {}) {
       try {
         await container.remove({ force: true });
         tracker.untrack(container.id);
-      } catch (_) {
-        tracker.untrack(container.id);
+      } catch (err) {
+        if (err.statusCode === 404) tracker.untrack(container.id);
       }
     }
   }
@@ -326,7 +327,10 @@ async function probeMemoryEnforcement(dockerClient, tracker, options = {}) {
  *
  * @returns {string}
  */
-function buildPidProbeScript() {
+function buildPidProbeScript(pidsLimit = 10) {
+  if (!Number.isInteger(pidsLimit) || pidsLimit < 1 || pidsLimit > 64) {
+    throw new Error('PID probe limit must be an integer between 1 and 64');
+  }
   return [
     'import os, sys, time, signal',
     'def read_cgroup(p):',
@@ -346,7 +350,7 @@ function buildPidProbeScript() {
     'print("CGROUP_PIDS_EVENTS_BEFORE:" + ",".join(ev_before.splitlines()))',
     'sys.stdout.flush()',
     'children = []',
-    'max_attempts = 25',
+    `max_attempts = ${pidsLimit + 15}`,
     'fork_blocked = False',
     'error_msg = ""',
     'try:',
@@ -378,22 +382,35 @@ function buildPidProbeScript() {
     '    delta_max = a_d.get("max", 0) - b_d.get("max", 0)',
     '    print(f"CGROUP_PIDS_EVENTS_DELTA:max={delta_max}")',
     '    sys.stdout.flush()',
+    '    reaped = 0',
+    '    cleanup_failures = []',
     '    for pid in children:',
     '        try:',
     '            os.kill(pid, signal.SIGKILL)',
-    '        except:',
+    '        except ProcessLookupError:',
     '            pass',
+    '        except Exception as e:',
+    '            cleanup_failures.append(f"kill({pid}):{e}")',
     '    for pid in children:',
     '        try:',
-    '            os.waitpid(pid, 0)',
-    '        except:',
-    '            pass',
-    '    print(f"REAPED_{len(children)}_CHILDREN")',
+    '            wpid, _ = os.waitpid(pid, 0)',
+    '            if wpid == pid:',
+    '                reaped += 1',
+    '            else:',
+    '                cleanup_failures.append(f"waitpid({pid}):unexpected_pid={wpid}")',
+    '        except Exception as e:',
+    '            cleanup_failures.append(f"waitpid({pid}):{e}")',
+    '    print(f"REAPED_{reaped}_CHILDREN")',
+    '    if cleanup_failures:',
+    '        print("CLEANUP_FAILURES:" + ";".join(cleanup_failures))',
     '    sys.stdout.flush()',
-    'if fork_blocked:',
+    'if fork_blocked and len(children) > 0 and reaped == len(children) and not cleanup_failures:',
     '    sys.exit(0)',
     'else:',
-    '    print("FORK_NEVER_BLOCKED")',
+    '    if not fork_blocked:',
+    '        print("FORK_NEVER_BLOCKED")',
+    '    if reaped != len(children):',
+    '        print(f"REAP_INCOMPLETE:spawned={len(children)},reaped={reaped}")',
     '    sys.exit(1)',
   ].join('\n');
 }
@@ -410,7 +427,7 @@ async function probePidEnforcement(dockerClient, tracker, options = {}) {
   const pidsLimit = options.pidsLimit || 10;
 
   // Python workload: inspects pids.max and pids.events before/after sequential fork loop, reaps all children
-  const pythonScript = buildPidProbeScript();
+  const pythonScript = buildPidProbeScript(pidsLimit);
 
   const result = await executeProbeContainer(dockerClient, tracker, {
     probeName: 'pid',
@@ -427,7 +444,7 @@ async function probePidEnforcement(dockerClient, tracker, options = {}) {
   const matchSpawned = result.stdout.match(/FORK_BLOCKED_AT_(\d+)_CHILDREN/);
   const childrenSpawned = matchSpawned ? parseInt(matchSpawned[1], 10) : (result.stdout.match(/FORKED_\d+/g) || []).length;
   const matchReaped = result.stdout.match(/REAPED_(\d+)_CHILDREN/);
-  const childrenReaped = matchReaped ? parseInt(matchReaped[1], 10) : childrenSpawned;
+  const childrenReaped = matchReaped ? parseInt(matchReaped[1], 10) : null;
   const forkBlocked = result.stdout.includes('FORK_BLOCKED_AT_') || /BlockingIOError|Resource temporarily unavailable|Errno 11/i.test(result.stdout);
 
   const matchMax = result.stdout.match(/CGROUP_PIDS_MAX:(\S+)/);
@@ -442,6 +459,11 @@ async function probePidEnforcement(dockerClient, tracker, options = {}) {
     }
   }
 
+  const matchCleanupFailures = result.stdout.match(/CLEANUP_FAILURES:([^\r\n]+)/);
+  const cleanupFailures = matchCleanupFailures
+    ? matchCleanupFailures[1].split(';').map((s) => s.trim()).filter(Boolean)
+    : [];
+
   return {
     configuredPidsLimit: pidsLimit,
     observedPidsMax,
@@ -449,6 +471,8 @@ async function probePidEnforcement(dockerClient, tracker, options = {}) {
     forkBlocked,
     pidsEventsDelta,
     childrenReaped,
+    cleanupFailures,
+    timedOut: result.timedOut,
     exitCode: result.exitCode,
     stdout: result.stdout,
     stderr: result.stderr,
@@ -550,6 +574,7 @@ async function probeCpuEnforcement(dockerClient, tracker, options = {}) {
 
   return {
     requestedNanoCPUs: nanoCPUs,
+    timedOut: result.timedOut,
     observedCpuMax,
     wallSeconds,
     processCpuSeconds,
@@ -622,6 +647,8 @@ async function probeGvisorIntegration(dockerClient, tracker, daemonInfo = {}, op
   return {
     runtimeRequested: 'runsc',
     runtimeRegistered: true,
+    exitCode: result.exitCode,
+    timedOut: result.timedOut,
     containerStarted: result.error === null,
     procVersion,
     startupError: result.error,

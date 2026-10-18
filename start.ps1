@@ -8,10 +8,9 @@ $repoRoot = $PSScriptRoot
 $infraDir = Join-Path $repoRoot 'infrastructure'
 $envPath = Join-Path $infraDir '.env'
 $composePath = Join-Path $infraDir 'docker-compose.yml'
-$runnerDockerfile = Join-Path $repoRoot 'execution\runners\python\Dockerfile'
-$runnerContext = Join-Path $repoRoot 'execution\runners\python'
-$runnerImage = 'codecollab-runner-python:latest'
-$daemonArchivePath = '/tmp/codecollab-runner-python.tar'
+$runnerLanguages = @('python', 'cpp', 'java')
+$runnerImages = @($runnerLanguages | ForEach-Object { "codecollab-runner-${_}:latest" })
+$daemonArchivePath = '/tmp/codecollab-runners-' + [guid]::NewGuid().ToString('N') + '.tar'
 
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
     throw 'Docker CLI was not found. Install/start Docker Desktop, then retry.'
@@ -19,8 +18,13 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
 if (-not (Test-Path $envPath -PathType Leaf)) {
     throw 'infrastructure/.env is missing. Run .\setup.ps1 first.'
 }
-if (-not (Test-Path $composePath -PathType Leaf) -or -not (Test-Path $runnerDockerfile -PathType Leaf)) {
-    throw 'Required Compose or Python runner files are missing. Save this script in the CodeCollab repository root.'
+if (-not (Test-Path $composePath -PathType Leaf)) {
+    throw 'Required Compose file is missing. Save this script in the CodeCollab repository root.'
+}
+foreach ($language in $runnerLanguages) {
+    if (-not (Test-Path (Join-Path $repoRoot "execution/runners/$language/Dockerfile") -PathType Leaf)) {
+        throw "Required $language runner Dockerfile is missing."
+    }
 }
 
 $envText = [System.IO.File]::ReadAllText($envPath)
@@ -43,7 +47,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $composeBase = @('--env-file', $envPath, '-f', $composePath)
-$tempArchive = Join-Path ([System.IO.Path]::GetTempPath()) ("codecollab-python-" + [guid]::NewGuid().ToString('N') + '.tar')
+$tempArchive = Join-Path ([System.IO.Path]::GetTempPath()) ("codecollab-runners-" + [guid]::NewGuid().ToString('N') + '.tar')
 $copiedToDaemon = $false
 
 Write-Host 'Starting CodeCollab local development stack...' -ForegroundColor Cyan
@@ -74,32 +78,36 @@ try {
         throw 'Execution daemon did not become ready within 90 seconds. Worker was not started.'
     }
 
-    Write-Host 'Building Python 3.11 runner image in the local Docker engine...' -ForegroundColor Cyan
-    & docker build -t $runnerImage -f $runnerDockerfile $runnerContext
-    if ($LASTEXITCODE -ne 0) {
-        throw 'Failed to build the Python runner image.'
+    foreach ($language in $runnerLanguages) {
+        $runnerImage = "codecollab-runner-${language}:latest"
+        $runnerDockerfile = Join-Path $repoRoot "execution/runners/$language/Dockerfile"
+        $runnerContext = Join-Path $repoRoot 'execution/runners'
+        if ($language -eq 'python') { $runnerContext = Join-Path $runnerContext 'python' }
+        Write-Host "Building $language runner image..." -ForegroundColor Cyan
+        & docker build -t $runnerImage -f $runnerDockerfile $runnerContext
+        if ($LASTEXITCODE -ne 0) { throw "Failed to build the $language runner image." }
     }
 
-    Write-Host 'Transferring the Python runner image into the isolated execution daemon...' -ForegroundColor Cyan
-    & docker image save --output $tempArchive $runnerImage
+    Write-Host 'Transferring all runner images into the isolated execution daemon...' -ForegroundColor Cyan
+    & docker image save --output $tempArchive @runnerImages
     if ($LASTEXITCODE -ne 0) {
-        throw 'Failed to save the Python runner image archive.'
+        throw 'Failed to save the runner image archive.'
     }
 
     & docker compose @composeBase cp $tempArchive "execution-daemon:$daemonArchivePath"
     if ($LASTEXITCODE -ne 0) {
-        throw 'Could not copy the Python runner image into execution-daemon.'
+        throw 'Could not copy the runner images into execution-daemon.'
     }
     $copiedToDaemon = $true
 
     & docker compose @composeBase exec -T execution-daemon docker -H tcp://127.0.0.1:2375 load -i $daemonArchivePath
     if ($LASTEXITCODE -ne 0) {
-        throw 'Could not load the Python runner image into the isolated execution daemon.'
+        throw 'Could not load the runner images into the isolated execution daemon.'
     }
 
-    & docker compose @composeBase exec -T execution-daemon docker -H tcp://127.0.0.1:2375 image inspect $runnerImage
-    if ($LASTEXITCODE -ne 0) {
-        throw 'Python runner image verification failed inside the isolated execution daemon.'
+    foreach ($runnerImage in $runnerImages) {
+        & docker compose @composeBase exec -T execution-daemon docker -H tcp://127.0.0.1:2375 image inspect --format '{{.Id}}' $runnerImage
+        if ($LASTEXITCODE -ne 0) { throw "$runnerImage verification failed inside the isolated execution daemon." }
     }
 
     # Start the worker only after its expected runner image is present.
@@ -132,7 +140,7 @@ try {
     Write-Host 'CodeCollab services are up.' -ForegroundColor Green
     Write-Host 'Frontend: http://localhost:3000'
     Write-Host 'Backend:  http://localhost:5000/health'
-    Write-Host "Python image verified in execution-daemon: $runnerImage" -ForegroundColor Green
+    Write-Host "Runner images verified in execution-daemon: $($runnerImages -join ', ')" -ForegroundColor Green
     Write-Host 'Try running print("Hello from CodeCollab!") from a room.'
     Write-Host 'Reminder: this is a trusted local development profile, not production security qualification.' -ForegroundColor Yellow
 

@@ -159,14 +159,14 @@ describe('Frontend Code Execution & Terminal Integration (M0.5e)', () => {
           status: 400,
           data: {
             ok: false,
-            error: "Execution for 'cpp' is not yet supported in this milestone. Currently executable: python",
+            error: "Unsupported language: 'ruby'",
           },
         },
       });
 
       const payload = {
         roomId: 'room-test-1',
-        language: 'cpp',
+        language: 'ruby',
         code: '#include <iostream>',
       };
 
@@ -174,7 +174,7 @@ describe('Frontend Code Execution & Terminal Integration (M0.5e)', () => {
 
       expect(result.ok).toBe(false);
       expect(result.status).toBe('failed');
-      expect(result.error).toContain('not yet supported');
+      expect(result.error).toContain('Unsupported language');
     });
   });
 
@@ -182,7 +182,7 @@ describe('Frontend Code Execution & Terminal Integration (M0.5e)', () => {
     function canRunCode({ isDriver, isExecuting, language }) {
       if (!isDriver) return { canRun: false, reason: 'Only the active room Driver can execute code' };
       if (isExecuting) return { canRun: false, reason: 'Execution currently in progress' };
-      if (language !== 'python') return { canRun: false, reason: 'Execution currently supported for Python only' };
+      if (!['python', 'cpp', 'java'].includes(language)) return { canRun: false, reason: 'Preview only' };
       return { canRun: true };
     }
 
@@ -203,13 +203,13 @@ describe('Frontend Code Execution & Terminal Integration (M0.5e)', () => {
       expect(state.reason).toContain('in progress');
     });
 
-    it('should prevent execution for non-python preview languages (Java, C++, JS)', () => {
+    it('should allow Java and C++ and prevent execution for preview-only JavaScript', () => {
       const javaState = canRunCode({ isDriver: true, isExecuting: false, language: 'java' });
       const cppState = canRunCode({ isDriver: true, isExecuting: false, language: 'cpp' });
       const jsState = canRunCode({ isDriver: true, isExecuting: false, language: 'javascript' });
 
-      expect(javaState.canRun).toBe(false);
-      expect(cppState.canRun).toBe(false);
+      expect(javaState.canRun).toBe(true);
+      expect(cppState.canRun).toBe(true);
       expect(jsState.canRun).toBe(false);
     });
   });

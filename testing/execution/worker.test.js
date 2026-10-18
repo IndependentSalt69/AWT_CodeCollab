@@ -196,7 +196,7 @@ describe('Standalone Execution Worker Suite (M1.0 Phase A)', () => {
 
   describe('6. Worker Preflight Capability Verification', () => {
     test('validateWorkerPreflight executes and returns daemon cgroup capabilities', async () => {
-      const result = await validateWorkerPreflight({ requireCgroups: false });
+      const result = await validateWorkerPreflight({ requireCgroups: false, nodeEnv: 'test', executionProfile: 'local-dev-execution' });
       expect(result).toBeDefined();
       expect(result.cgroupCaps).toBeDefined();
     });

@@ -7,7 +7,7 @@ const { parseMemoryToBytes } = require('../../../execution/engine/resourceLimits
 const sandboxConfig = require('../../../execution/engine/sandboxConfig');
 
 const SUPPORTED_LANGUAGES = ['python', 'java', 'cpp'];
-const EXECUTABLE_LANGUAGES = ['python']; // Languages with dynamic container runner implemented
+const { EXECUTABLE_LANGUAGES } = require('../../../execution/engine/languages');
 
 /**
  * Checks if the user / socket is the active Driver of the given room.
@@ -111,6 +111,9 @@ function validateExecutionRequest({ roomId, language, code, timeout, memory }) {
 
   if (typeof code !== 'string') {
     return { valid: false, error: 'code must be a string' };
+  }
+  if (!code.trim() || code.includes('\0')) {
+    return { valid: false, error: 'code must be non-empty and contain no NUL bytes' };
   }
 
   if (Buffer.byteLength(code, 'utf8') > sandboxConfig.MAX_CODE_SIZE_BYTES) {

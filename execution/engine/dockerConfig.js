@@ -302,6 +302,9 @@ async function verifyCgroupCapabilities(dockerClient, options = {}) {
     requireCgroups = !isTrustedLocalDevProfile;
   }
 
+  if (!requireCgroups && !isTrustedLocalDevProfile) {
+    throw new Error('REQUIRE_CGROUP_ENFORCEMENT=false is not permitted outside the trusted local-development profile.');
+  }
 
   if (requireCgroups && !controllersEnforced) {
     const missingControllers = [];

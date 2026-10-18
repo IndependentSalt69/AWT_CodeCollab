@@ -1,4 +1,15 @@
-## Current Qualification Status (2026-10-15)
+## Current Qualification Status (2026-10-18)
+
+- **Release status:** `NOT_QUALIFIED_FOR_PRODUCTION`. No intended native Linux production target was available.
+- **New implementation:** C++17/GCC 13 and Java 17 compilation/execution now use the existing API, BullMQ worker and sandbox. Java requires a default-package `Main` entry point. Startup builds and transfers all three language images into the execution daemon.
+- **Current verification:** 25 suites / 432 tests passed on Docker Desktop, with isolated Redis and mocked database writes; frontend build and Compose validation passed. This is functional evidence, not production isolation qualification.
+- **Nested daemon:** API/worker suites passed initially; repeated runner tests hit outer PID exhaustion (`pids.max=128`, `pids.events max=750`). Its per-runner cgroup driver remains `none`, and `runsc` is unregistered.
+- **Ubuntu WSL2:** the separate rootless daemon advertises systemd/cgroup v2 and has `runsc`, but a bounded gVisor workload reproduced `Interactive authentication required`.
+- **Qualification corrections:** exact observed resource limits, workload completion, confirmed child reaping via verified `waitpid` matching without swallowing cleanup errors, same-runtime probes, failed cleanup and mandatory application checks now prevent false qualification. The resource-only harness deliberately cannot certify the application without application-path evidence on the same production target.
+
+See [implementation, commands, evidence, blockers and manual review instructions](execution-security-cpp-java-report.md).
+
+## Previous Qualification Snapshot (2026-10-15)
 
 > The detailed audit below is a historical snapshot dated 2026-10-08. Some implementation claims predate subsequent milestones and must be verified against the current repository.
 

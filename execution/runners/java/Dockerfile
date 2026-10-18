@@ -1,5 +1,10 @@
-FROM openjdk:17-jdk-slim
+FROM eclipse-temurin:17-jdk-jammy
+RUN apt-get update && apt-get install -y --no-install-recommends python3 \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd -g 1000 sandbox && useradd -u 1000 -g sandbox -M sandbox
 WORKDIR /app
-COPY . /app
-RUN javac runner.java 2>/dev/null || true
-CMD ["java", "Runner"]
+COPY compiled_runner.py /app/runner.py
+RUN chmod -R 555 /app && mkdir /work && chown sandbox:sandbox /work
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+USER sandbox
+ENTRYPOINT ["python3", "-u", "/app/runner.py", "java"]

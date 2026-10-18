@@ -424,7 +424,7 @@ describe('Rootless Execution Daemon & Runtime Isolation Suite (M1.0 Phase B)', (
           PidsLimit: false,
         }),
       };
-      const caps = await verifyCgroupCapabilities(mockClient, { requireCgroups: false });
+      const caps = await verifyCgroupCapabilities(mockClient, { requireCgroups: false, nodeEnv: 'test', executionProfile: 'local-dev-execution' });
       expect(caps.cgroupDriver).toBe('none');
       expect(caps.controllersEnforced).toBe(false);
       expect(caps.memoryLimit).toBe(false);

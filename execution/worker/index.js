@@ -184,7 +184,7 @@ async function validateWorkerPreflight(options = {}) {
     );
   } else {
     console.log(
-      `[ExecutionWorker] Daemon cgroup enforcement verified (driver: ${cgroupCaps.cgroupDriver}, version: ${cgroupCaps.cgroupVersion}).`
+      `[ExecutionWorker] Daemon advertises cgroup capabilities (driver: ${cgroupCaps.cgroupDriver}, version: ${cgroupCaps.cgroupVersion}); live enforcement qualification is still required.`
     );
   }
 

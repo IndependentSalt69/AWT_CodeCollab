@@ -7,6 +7,7 @@ const { initRealtimeServer } = require('../../realtime/server');
 const { generateToken } = require('../../backend/src/middleware/auth');
 const executeRouter = require('../../backend/src/routes/execute');
 const executionQueue = require('../../execution/engine/queue');
+const { startWorker, stopWorker } = require('../../execution/worker');
 const ExecutionRun = require('../../database/models/ExecutionRun');
 const Room = require('../../database/models/Room');
 const { verifyRedisPreflight } = require('../redisTestHelper');
@@ -84,7 +85,7 @@ describe('Backend Execution API Tests (POST /api/execute - M0.5d)', () => {
     });
 
     // Start BullMQ execution worker
-    executionQueue.startWorker();
+    startWorker();
 
     app = express();
     app.use(express.json());
@@ -141,6 +142,7 @@ describe('Backend Execution API Tests (POST /api/execute - M0.5d)', () => {
     if (otherRoomClient) otherRoomClient.disconnect();
     if (io) await new Promise((r) => io.close(r));
     if (server) await new Promise((r) => server.close(r));
+    await stopWorker(true);
     await executionQueue.close(true);
   });
 
@@ -248,18 +250,40 @@ describe('Backend Execution API Tests (POST /api/execute - M0.5d)', () => {
       expect(res.body.error).toMatch(/unsupported language/i);
     });
 
-    test('should reject placeholder language without active runner (cpp / java) with 400', async () => {
+    test.each([
+      ['cpp', '#include <iostream>\nint main() { std::cout << "Hello from C++!"; }', 'Hello from C++!'],
+      ['java', 'public class Main { public static void main(String[] args) { System.out.println("Hello from Java!"); } }', 'Hello from Java!'],
+    ])('should execute %s through the authorized API and queue', async (language, code, output) => {
       const res = await request(app)
         .post('/api/execute')
         .set('Authorization', `Bearer ${driverToken}`)
         .send({
           roomId: testRoomId,
-          language: 'cpp',
-          code: 'int main() {}',
+          language,
+          code,
         });
 
-      expect(res.status).toBe(400);
-      expect(res.body.error).toMatch(/not yet supported/i);
+      expect(res.status).toBe(200);
+      expect(res.body.result.status).toBe('completed');
+      expect(res.body.result.exitCode).toBe(0);
+      expect(res.body.result.stdout.trim()).toBe(output);
+      expect(res.body.result.stderr).toBe('');
+    });
+
+    test.each(['cpp', 'java'])('rejects unauthorized %s execution before queueing', async (language) => {
+      const res = await request(app).post('/api/execute')
+        .set('Authorization', `Bearer ${viewerToken}`)
+        .send({ roomId: testRoomId, language, code: 'invalid code', socketId: viewerClient.id });
+      expect(res.status).toBe(403);
+    });
+
+    test.each(['cpp', 'java'])('rejects empty and oversized %s source at the API', async (language) => {
+      for (const code of ['', '   ', '\0', 'x'.repeat(65537)]) {
+        const res = await request(app).post('/api/execute')
+          .set('Authorization', `Bearer ${driverToken}`)
+          .send({ roomId: testRoomId, language, code });
+        expect(res.status).toBe(400);
+      }
     });
 
     test('should reject invalid timeout with 400', async () => {

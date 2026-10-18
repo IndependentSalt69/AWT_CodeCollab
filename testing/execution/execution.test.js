@@ -23,15 +23,7 @@ describe('Dockerode Execution Orchestrator Tests (M0.5b)', () => {
       await expect(executeCode({ code: 'print(1)' })).rejects.toThrow('Language and code are required');
     });
 
-    test('should reject unsupported languages (e.g. cpp, java, rust)', async () => {
-      await expect(
-        executeCode({ language: 'cpp', code: 'int main() { return 0; }' })
-      ).rejects.toThrow(/unsupported execution language: cpp/i);
-
-      await expect(
-        executeCode({ language: 'java', code: 'public class Solution {}' })
-      ).rejects.toThrow(/unsupported execution language: java/i);
-
+    test('should reject unsupported languages', async () => {
       await expect(
         executeCode({ language: 'ruby', code: 'puts "hello"' })
       ).rejects.toThrow(/unsupported execution language: ruby/i);
@@ -39,6 +31,11 @@ describe('Dockerode Execution Orchestrator Tests (M0.5b)', () => {
   });
 
   describe('2. Python Execution via Dockerode (Valid Execution)', () => {
+    test('preserves the required Python greeting and calculation', async () => {
+      const result = await executeCode({ language: 'python', code: 'print("Hello from CodeCollab!")\nprint(2 + 3)' });
+      expect(result).toMatchObject({ status: 'completed', exitCode: 0, stderr: '' });
+      expect(result.stdout.trim().split(/\r?\n/)).toEqual(['Hello from CodeCollab!', '5']);
+    });
     test('should execute basic hello world in Docker container', async () => {
       const result = await executeCode({
         language: 'python',
