@@ -132,12 +132,12 @@ describe('Redis + BullMQ Execution Queue Tests (M0.5c)', () => {
 
     test('should process unsupported language jobs into structured failure result', async () => {
       const result = await executionQueue.execute({
-        language: 'cpp',
-        code: 'int main() { return 0; }',
+        language: 'ruby',
+        code: 'puts "unsupported"',
       });
 
       expect(result.status).toBe('failed');
-      expect(result.stderr).toContain('Unsupported execution language: cpp');
+      expect(result.stderr).toContain('Unsupported execution language: ruby');
     });
   });
 

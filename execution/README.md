@@ -173,8 +173,24 @@ docker build -t codecollab-runner-python:latest execution/runners/python
 
 ## 7. Other Language Runners (`execution/runners/`)
 
-- `java/` — OpenJDK 17 runner *(placeholder skeleton; editor preview only)*.
-- `cpp/` — GCC 13 runner *(placeholder skeleton; editor preview only)*.
+- `cpp/` — GCC 13, C++17. Compiles fixed `main.cpp` and runs the generated binary.
+- `java/` — Eclipse Temurin JDK 17. Compiles fixed `Main.java`; provide `public class Main` with `public static void main(String[] args)` in the default package. Other public class names, packages, or missing entry points return compiler/runtime diagnostics. User filenames, JVM flags, and class paths are not accepted.
+- `compiled_runner.py` — shared trusted launcher; uses argument arrays without a shell, runs compiler and program as UID 1000, and terminates the process group after each phase. Container removal is the final cleanup boundary, including descendants that create new sessions.
+
+Both compiled languages use the existing API, BullMQ worker, Dockerode executor and result schema. `stderr` carries compiler diagnostics and runtime exceptions; nonzero exit codes produce `failed`. The existing 5-second default / 10-second maximum timeout includes **compilation and execution together**. A timeout kills the whole container; it is not a fresh budget for each phase.
+
+The 64 KiB source/output limits, 256 MiB memory ceiling, 0.5 CPU quota, 64 PID limit, disabled networking, read-only root filesystem, dropped capabilities and no-new-privileges policy remain. A 32 MiB `/work` tmpfs holds source and compiler outputs. C++ requires `exec` on this mount to run its binary; it retains `nosuid,nodev,mode=700`. Java's `/work` and every runner's `/tmp` remain `noexec`. Java uses a 96 MiB heap, SerialGC, one active processor and bounded stack/metaspace/code cache; these settings do not replace cgroup enforcement.
+
+Build from the shared runner context:
+
+```bash
+docker build -t codecollab-runner-cpp:latest -f execution/runners/cpp/Dockerfile execution/runners
+docker build -t codecollab-runner-java:latest -f execution/runners/java/Dockerfile execution/runners
+```
+
+`start.ps1` builds all three images, saves and loads them into the inner execution daemon, verifies each image there, then starts the worker. Building only on Docker Desktop does not make an image available to that daemon. On a native Linux target, build/load all three images into the dedicated rootless daemon before starting its worker. Missing images fail closed; there is no host compiler fallback.
+
+See [the 2026-10-18 implementation and verification report](../docs/execution-security-cpp-java-report.md). The release remains `NOT_QUALIFIED_FOR_PRODUCTION`.
 
 ---
 

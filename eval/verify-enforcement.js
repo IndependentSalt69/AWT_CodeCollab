@@ -218,6 +218,14 @@ async function runHarness(cliOptions = {}) {
 
     // Ensure any tracked containers are cleaned up
     await tracker.cleanup(dockerClient);
+    results.cleanup = {
+      status: !preflight.canRunLiveProbes ? VERDICT_SKIPPED : (tracker.createdContainerIds.size === 0 ? VERDICT_PASS : VERDICT_FAIL),
+      explanation: !preflight.canRunLiveProbes ? 'No probe containers were created; live cleanup was not exercised.' :
+        (tracker.createdContainerIds.size === 0 ? 'All tracked probe containers removed.' : 'Probe containers remain after cleanup retry.'),
+    };
+    for (const name of ['timeout', 'output', 'authorization', 'roomIsolation']) {
+      results[name] = { status: VERDICT_BLOCKED, explanation: 'Requires application-path evidence on this production target; resource probes alone do not supply it.' };
+    }
 
     const combinedEnv = {
       ...environment,
@@ -256,6 +264,11 @@ async function runHarness(cliOptions = {}) {
         ...(results.pidProduction ? { pidProduction: results.pidProduction } : {}),
         cpu: results.cpu,
         gvisor: results.gvisor,
+        cleanup: results.cleanup,
+        timeout: results.timeout,
+        output: results.output,
+        authorization: results.authorization,
+        roomIsolation: results.roomIsolation,
       },
       verdict,
     };

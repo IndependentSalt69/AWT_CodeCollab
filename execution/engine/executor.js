@@ -25,15 +25,13 @@ function resetDockerClient() {
   dockerInstance = null;
 }
 
-const LANGUAGE_IMAGE_MAP = {
-  python: 'codecollab-runner-python:latest',
-};
+const { LANGUAGE_IMAGE_MAP, EXECUTABLE_LANGUAGES } = require('./languages');
 
 /**
  * Runs submitted code in an ephemeral Docker container.
  *
  * @param {Object} options
- * @param {string} options.language - 'python'
+ * @param {string} options.language - 'python', 'cpp', or 'java'
  * @param {string} options.code - User source code
  * @param {number} [options.timeout] - Max execution time in ms (default 5000, capped at 10000)
  * @param {string|number} [options.memory] - Max memory (default '256m', capped at 256m)
@@ -50,8 +48,8 @@ async function runInSandbox({
   network = sandboxConfig.network,
   runtime = sandboxConfig.CONTAINER_RUNTIME,
 }) {
-  const normalizedLang = (language || '').toLowerCase().trim();
-  const imageName = LANGUAGE_IMAGE_MAP[normalizedLang];
+  const normalizedLang = typeof language === 'string' ? language.toLowerCase().trim() : '';
+  const imageName = EXECUTABLE_LANGUAGES.includes(normalizedLang) ? LANGUAGE_IMAGE_MAP[normalizedLang] : null;
 
   if (!imageName) {
     throw new Error(`Unsupported execution language: ${language}`);
@@ -59,6 +57,9 @@ async function runInSandbox({
 
   if (typeof code !== 'string') {
     throw new Error('Code must be a string');
+  }
+  if (!code.trim() || code.includes('\0')) {
+    throw new Error('Code must be non-empty and contain no NUL bytes');
   }
 
   // Defensive code size safety boundary (64 KiB)
@@ -104,6 +105,7 @@ async function runInSandbox({
       AttachStderr: true,
       Tty: false,
       User: 'sandbox',
+      Labels: { 'codecollab.runner': normalizedLang },
       HostConfig: {
         Memory: memoryBytes,
         MemorySwap: memoryBytes,
@@ -113,7 +115,13 @@ async function runInSandbox({
         ReadonlyRootfs: true,
         CapDrop: ['ALL'],
         SecurityOpt: ['no-new-privileges:true'],
-        Tmpfs: { '/tmp': 'rw,noexec,nosuid,size=32m' },
+        Tmpfs: {
+          '/tmp': 'rw,noexec,nosuid,size=32m',
+          // Native binaries need one executable scratch mount. /tmp stays noexec.
+          ...(normalizedLang !== 'python' ? {
+            '/work': `rw,${normalizedLang === 'cpp' ? 'exec' : 'noexec'},nosuid,nodev,size=32m,uid=1000,gid=1000,mode=700`,
+          } : {}),
+        },
         ...(selectedRuntime === 'runsc' ? { Runtime: 'runsc' } : {}),
       },
     });
@@ -280,8 +288,10 @@ async function runInSandbox({
     if (container) {
       try {
         await container.remove({ force: true });
-      } catch (_) {
-        // Container might already be removed
+      } catch (err) {
+        if (err.statusCode !== 404) {
+          throw new Error(`Sandbox cleanup failed: ${err.message}`);
+        }
       }
     }
   }

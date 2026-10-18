@@ -23,7 +23,7 @@ module.exports = async function executeCode(runSpec) {
     memory = sandboxConfig.DEFAULT_MEMORY,
   } = runSpec;
 
-  if (!language || !code) {
+  if (typeof language !== 'string' || !language.trim() || typeof code !== 'string' || !code.trim()) {
     throw new Error('Language and code are required for execution');
   }
 

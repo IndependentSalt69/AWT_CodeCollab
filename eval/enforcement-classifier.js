@@ -120,6 +120,11 @@ function classifyMemoryEnforcement(evidence = {}) {
   const hasOomKilledFlag = oomKilled === true;
   const hasOomKillEvents = oomKillCount > 0;
 
+  if ((hasOomKilledFlag || hasOomKillEvents) &&
+      (!/^\d+$/.test(String(observedMemoryMax)) || Number(observedMemoryMax) !== configuredLimitBytes)) {
+    return { status: VERDICT_FAIL, explanation: 'Observed memory.max must match the configured finite memory limit.', evidence: sanitizeDetails(evidence) };
+  }
+
   if (hasOomKilledFlag || hasOomKillEvents) {
     let reason = 'Kernel OOM enforcement verified: ';
     const notes = [];
@@ -180,7 +185,8 @@ function classifyPidEnforcement(evidence = {}) {
     childrenSpawned = 0,
     forkBlocked = false,
     pidsEventsDelta = {},
-    childrenReaped = 0,
+    childrenReaped = null,
+    cleanupFailures = [],
     exitCode = null,
     stdout = '',
     stderr = '',
@@ -283,6 +289,23 @@ function classifyPidEnforcement(evidence = {}) {
     }
   }
 
+  const hasCleanupFailures = (Array.isArray(cleanupFailures) && cleanupFailures.length > 0) ||
+    (Array.isArray(evidence.cleanupFailures) && evidence.cleanupFailures.length > 0) ||
+    stdout.includes('CLEANUP_FAILURES:') ||
+    stdout.includes('REAP_INCOMPLETE:');
+
+  const allChildrenReaped = typeof childrenReaped === 'number' &&
+    Number.isInteger(childrenReaped) &&
+    childrenReaped > 0 &&
+    childrenReaped === childrenSpawned &&
+    !hasCleanupFailures;
+
+  if (isForkBlocked && (evidence.timedOut || exitCode !== 0 ||
+      !/^\d+$/.test(String(observedPidsMax)) || Number(observedPidsMax) !== configuredPidsLimit ||
+      childrenSpawned < 1 || !allChildrenReaped)) {
+    return { status: VERDICT_FAIL, explanation: 'PID probe requires the exact finite pids.max, successful completion, and evidence that every child was reaped.', evidence: sanitizeDetails(evidence) };
+  }
+
   if (isForkBlocked) {
     return {
       status: VERDICT_PASS,
@@ -370,6 +393,13 @@ function classifyCpuEnforcement(evidence = {}) {
     };
   }
 
+  const quota = String(observedCpuMax || '').match(/^(\d+)\s+(\d+)$/);
+  if (!quota || Number(quota[2]) <= 0 || Number(quota[1]) / Number(quota[2]) !== targetRatio ||
+      evidence.timedOut || exitCode !== 0 || !Number.isFinite(parsedRatio) ||
+      wallSeconds < 1 || processCpuSeconds <= 0 || parsedRatio <= 0 || parsedRatio > targetRatio + 0.15) {
+    return { status: VERDICT_FAIL, explanation: 'CPU probe requires matching finite cpu.max, successful completion, and measured CPU usage within the configured quota tolerance.', evidence: sanitizeDetails(evidence) };
+  }
+
   return {
     status: VERDICT_PASS,
     requestedNanoCPUs,
@@ -431,8 +461,8 @@ function classifyGvisorIntegration(evidence = {}) {
   }
 
   // Case 3: Container executed — inspect /proc/version for gVisor identity
-  const combinedOutput = `${procVersion} ${stdout}`;
-  if (/gVisor/i.test(combinedOutput)) {
+  if (runtimeRequested === 'runsc' && containerStarted && evidence.exitCode === 0 &&
+      !evidence.timedOut && /gVisor/i.test(procVersion)) {
     return {
       status: VERDICT_PASS,
       sandboxVerified: true,
@@ -551,7 +581,11 @@ function resolveOverallVerdict(environment = {}, daemonOrResults = {}, maybeResu
   const cpuPass = testResults.cpu?.status === VERDICT_PASS;
   const gvisorPass = testResults.gvisor?.status === VERDICT_PASS;
 
-  if (memoryPass && pidPass && cpuPass && gvisorPass) {
+  // Resource probes alone cannot certify the whole public execution path.
+  const applicationChecks = ['timeout', 'output', 'cleanup', 'authorization', 'roomIsolation'];
+  const applicationPass = applicationChecks.every((name) => testResults[name]?.status === VERDICT_PASS);
+  const optionalPass = !testResults.pidProduction || testResults.pidProduction.status === VERDICT_PASS;
+  if (memoryPass && pidPass && cpuPass && gvisorPass && applicationPass && optionalPass) {
     return STATUS_QUALIFIED;
   }
 
@@ -594,7 +628,7 @@ ${winNotice}${wslNotice}## 1. Environment & Preflight Details
 | **Docker Server Version** | \`${env.dockerVersion || 'N/A'}\` |
 | **Cgroup Driver / Version** | \`${env.cgroupDriver || 'none'} / v${env.cgroupVersion || 'unknown'}\` |
 | **Rootless Daemon** | \`${Boolean(env.isRootless)}\` |
-| **Cgroup Controllers Enforced** | \`${Boolean(env.cgroupControllersEnforced)}\` |
+| **Daemon Advertises Cgroup Capabilities** | \`${Boolean(env.cgroupControllersEnforced)}\` |
 | **gVisor (runsc) Registered** | \`${Boolean(env.hasRunsc)}\` |
 
 ---
@@ -607,13 +641,15 @@ ${winNotice}${wslNotice}## 1. Environment & Preflight Details
 | **PID Limit (Fork Bomb)** | **\`${res.pid?.status || VERDICT_SKIPPED}\`** | ${res.pid?.explanation || 'Not executed'} |
 | **CPU Quota (CFS Bandwidth)** | **\`${res.cpu?.status || VERDICT_SKIPPED}\`** | ${res.cpu?.explanation || 'Not executed'} |
 | **gVisor (runsc) Sandbox** | **\`${res.gvisor?.status || VERDICT_SKIPPED}\`** | ${res.gvisor?.explanation || 'Not executed'} |
+| **Production PID Limit** | **\`${res.pidProduction?.status || VERDICT_SKIPPED}\`** | ${res.pidProduction?.explanation || 'Not requested'} |
+${['cleanup', 'timeout', 'output', 'authorization', 'roomIsolation'].map(name => `| **${name}** | **\`${res[name]?.status || VERDICT_BLOCKED}\`** | ${res[name]?.explanation || 'Application-path evidence required on this target'} |`).join('\n')}
 
 ---
 
 ## 3. Production Qualification Determination
 
 - **Final Determination:** \`${verdict}\`
-- **Qualification Criteria:** Every required control (Memory OOM kill, PID fork block, CPU quota throttling, and gVisor sandbox identity) must genuinely pass on an unprivileged, rootless Linux host managed by systemd cgroup v2 delegation.
+- **Qualification Criteria:** Memory OOM kill, PID fork block, CPU quota throttling, gVisor identity, cleanup, timeouts, output limits, authorization, and room isolation must pass on the intended native Linux target. Daemon capability advertisements are not live enforcement proof. This resource-only harness does not generate the required application-path evidence and cannot independently qualify a production release.
 `;
 }
 

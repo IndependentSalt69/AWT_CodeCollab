@@ -81,7 +81,7 @@ export default function App() {
 
   const roomId = activeRoom ? activeRoom.roomId : '';
   const isDriver = Boolean(myId && driverId === myId);
-  const isLanguageExecutable = language === 'python';
+  const isLanguageExecutable = ['python', 'cpp', 'java'].includes(language);
 
   const addActivity = (text: string) => {
     const newItem: ActivityItem = {
@@ -768,8 +768,8 @@ export default function App() {
               >
                 <option value="python">Python 3.11 (⚡ Container Sandbox)</option>
                 <option value="javascript">JavaScript (Preview Only)</option>
-                <option value="java">Java (Preview Only)</option>
-                <option value="cpp">C++ (Preview Only)</option>
+                <option value="java">Java 17 (Container Sandbox)</option>
+                <option value="cpp">C++17 (Container Sandbox)</option>
               </select>
             </div>
 
@@ -782,7 +782,7 @@ export default function App() {
                 !isDriver
                   ? 'Only the active Driver can run code'
                   : !isLanguageExecutable
-                  ? 'Execution is currently supported for Python only'
+                  ? 'Execution supports Python, C++, and Java'
                   : 'Execute code in container sandbox'
               }
               style={{
@@ -807,7 +807,7 @@ export default function App() {
           </div>
         </div>
 
-        {/* Non-python warning banner */}
+        {/* Preview-only language warning banner */}
         {!isLanguageExecutable && (
           <div
             style={{
@@ -820,7 +820,7 @@ export default function App() {
               marginBottom: '0.75rem',
             }}
           >
-            ℹ️ <strong>{language.toUpperCase()}</strong> is currently in editor preview mode. Container execution is active for <strong>Python 3.11</strong>.
+            ℹ️ <strong>{language.toUpperCase()}</strong> is currently in editor preview mode. Container execution supports <strong>Python 3.11, C++17, and Java 17</strong>.
           </div>
         )}
 
