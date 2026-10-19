@@ -3,6 +3,7 @@
  *
  * Validates:
  * - GET /api/rooms/:roomId/messages returns persisted chat history to members only
+ * - GET /api/rooms/:roomId/executions returns run history to members only
  * - Cursor pagination (limit/before) validation and ordering
  * - Unexpected server errors are not leaked to clients
  */
@@ -12,6 +13,7 @@ const express = require('express');
 
 const Room = require('../../database/models/Room');
 const Message = require('../../database/models/Message');
+const ExecutionRun = require('../../database/models/ExecutionRun');
 const roomsRouter = require('../../backend/src/routes/rooms');
 const { generateToken } = require('../../backend/src/middleware/auth');
 
@@ -58,6 +60,7 @@ function objectId(n) {
 describe('Room History API', () => {
   let app;
   let messages;
+  let runs;
   let captured;
 
   beforeAll(() => {
@@ -80,6 +83,11 @@ describe('Room History API', () => {
     jest.spyOn(Message, 'find').mockImplementation((query) => {
       captured = { query };
       return queryChain(messages, captured);
+    });
+
+    jest.spyOn(ExecutionRun, 'find').mockImplementation((query) => {
+      captured = { query };
+      return queryChain(runs, captured);
     });
   });
 
@@ -105,6 +113,36 @@ describe('Room History API', () => {
       content: 'other room secret',
       createdAt: new Date(),
     });
+    runs = [
+      {
+        _id: objectId(10),
+        roomId: room.roomId,
+        triggeredBy: { _id: userAlice.id, username: 'alice' },
+        language: 'python',
+        code: 'print("hi")',
+        status: 'completed',
+        stdout: 'hi\n',
+        stderr: '',
+        exitCode: 0,
+        executionTimeMs: 120,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+      {
+        _id: objectId(11),
+        roomId: room.roomId,
+        triggeredBy: { _id: userAlice.id, username: 'alice' },
+        language: 'python',
+        code: 'while True: pass',
+        status: 'timeout',
+        stdout: '',
+        stderr: 'Execution timed out after 5000ms',
+        exitCode: 124,
+        executionTimeMs: 5003,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    ];
   });
 
   describe('GET /api/rooms/:roomId/messages', () => {
@@ -202,6 +240,59 @@ describe('Room History API', () => {
 
       expect(res.status).toBe(500);
       expect(res.body.error).toBe('Failed to fetch chat history');
+    });
+  });
+
+  describe('GET /api/rooms/:roomId/executions', () => {
+    it('returns run history with status, timing and output to a member', async () => {
+      const res = await request(app)
+        .get(`/api/rooms/${room.roomId}/executions`)
+        .set('Authorization', `Bearer ${tokenBob}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.runs).toHaveLength(2);
+
+      const [latest, earlier] = res.body.runs;
+      expect(latest).toMatchObject({
+        id: objectId(11),
+        language: 'python',
+        status: 'timeout',
+        timedOut: true,
+        exitCode: 124,
+        executionTimeMs: 5003,
+        stderr: 'Execution timed out after 5000ms',
+        triggeredBy: { id: userAlice.id, username: 'alice' },
+      });
+      expect(earlier).toMatchObject({ status: 'completed', timedOut: false, stdout: 'hi\n', exitCode: 0 });
+      expect(latest.code).toBeUndefined();
+    });
+
+    it('returns an empty list when the room has no runs', async () => {
+      runs = [];
+      const res = await request(app)
+        .get(`/api/rooms/${room.roomId}/executions`)
+        .set('Authorization', `Bearer ${tokenAlice}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.runs).toEqual([]);
+      expect(res.body.nextCursor).toBeNull();
+    });
+
+    it('rejects non-members with 403', async () => {
+      const res = await request(app)
+        .get(`/api/rooms/${room.roomId}/executions`)
+        .set('Authorization', `Bearer ${tokenEve}`);
+
+      expect(res.status).toBe(403);
+      expect(res.body.runs).toBeUndefined();
+      expect(captured).toBeNull();
+    });
+
+    it('rejects an oversized page with 400', async () => {
+      const res = await request(app)
+        .get(`/api/rooms/${room.roomId}/executions?limit=500`)
+        .set('Authorization', `Bearer ${tokenAlice}`);
+      expect(res.status).toBe(400);
     });
   });
 });

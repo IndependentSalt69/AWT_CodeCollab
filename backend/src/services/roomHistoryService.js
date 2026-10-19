@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const Message = require('../../../database/models/Message');
+const ExecutionRun = require('../../../database/models/ExecutionRun');
 
 const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 100;
@@ -23,7 +24,7 @@ function parsePagination(query = {}) {
   let before = null;
   if (query.before !== undefined) {
     if (typeof query.before !== 'string' || !/^[0-9a-f]{24}$/i.test(query.before)) {
-      const error = new Error('before must be a valid message id');
+      const error = new Error('before must be a valid message or run id');
       error.status = 400;
       throw error;
     }
@@ -71,9 +72,47 @@ async function listRoomMessages(roomId, query) {
   return { messages, nextCursor: nextCursor(messages, limit) };
 }
 
+/**
+ * Lists execution runs for a room, newest first.
+ * Caller must have already verified room membership.
+ */
+async function listRoomExecutions(roomId, query) {
+  const { limit, before } = parsePagination(query);
+
+  const docs = await ExecutionRun.find(buildPageQuery(roomId, before))
+    .sort({ _id: -1 })
+    .limit(limit)
+    .populate('triggeredBy', 'username')
+    .lean();
+
+  const runs = docs.map((doc) => {
+    const triggeredBy = doc.triggeredBy && typeof doc.triggeredBy === 'object' && doc.triggeredBy.username
+      ? { id: String(doc.triggeredBy._id), username: doc.triggeredBy.username }
+      : { id: doc.triggeredBy ? String(doc.triggeredBy) : null, username: null };
+
+    return {
+      id: String(doc._id),
+      roomId: doc.roomId,
+      language: doc.language,
+      status: doc.status,
+      exitCode: doc.exitCode,
+      executionTimeMs: doc.executionTimeMs,
+      timedOut: doc.status === 'timeout',
+      stdout: doc.stdout || '',
+      stderr: doc.stderr || '',
+      triggeredBy,
+      createdAt: doc.createdAt,
+      updatedAt: doc.updatedAt,
+    };
+  });
+
+  return { runs, nextCursor: nextCursor(runs, limit) };
+}
+
 module.exports = {
   parsePagination,
   listRoomMessages,
+  listRoomExecutions,
   DEFAULT_PAGE_SIZE,
   MAX_PAGE_SIZE,
 };

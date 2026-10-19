@@ -247,7 +247,7 @@ Adds the authenticated user to the persistent membership list of a room using it
 ---
 
 ### 2.5 Room History Pagination (shared)
-Room history endpoints use cursor pagination:
+The chat history and execution history endpoints use the same cursor pagination:
 
 - Results are ordered **newest first**.
 - `limit` (optional query): integer from 1 to 100. Default 50.
@@ -288,6 +288,49 @@ Returns persisted chat messages for a room. New messages arrive live through the
 - **`403 Forbidden`**: Requester is not a member of the room.
 - **`404 Not Found`**: Unknown room.
 - **`500 Internal Server Error`**: `Failed to fetch chat history` (details are logged on the server only).
+
+---
+
+### 2.7 Execution History
+Returns past code runs for a room. Every room member can see every run in the room, including other members' output, which matches what members already see live through the `execution:*` events. Submitted source code is not included.
+
+- **URL:** `GET /api/rooms/:roomId/executions?limit=50&before=<runId>`
+- **Authentication:** Required (`Bearer <JWT_TOKEN>`)
+
+#### Successful Response (`200 OK`)
+```json
+{
+  "ok": true,
+  "runs": [
+    {
+      "id": "6713aa10e4b0a1c2d3e4f610",
+      "roomId": "algorithms-practice-f4a2b1",
+      "language": "python",
+      "status": "completed",
+      "exitCode": 0,
+      "executionTimeMs": 182,
+      "timedOut": false,
+      "stdout": "Hello\n",
+      "stderr": "",
+      "triggeredBy": { "id": "67056a1b2c3d4e5f6a7b8c01", "username": "alice_dev" },
+      "createdAt": "2026-10-19T10:05:00.000Z",
+      "updatedAt": "2026-10-19T10:05:01.000Z"
+    }
+  ],
+  "nextCursor": null
+}
+```
+
+- `status` is one of `queued`, `running`, `completed`, `failed`, `timeout`. A run is only `completed` after its final result has been saved.
+- `timedOut` is `true` when `status` is `timeout`.
+- `stdout` and `stderr` are stored with the existing 64 KiB output limit, so long output may end with a truncation notice.
+
+#### Error Responses
+- **`400 Bad Request`**: Invalid `limit` or `before`.
+- **`401 Unauthorized`**: Missing or invalid token.
+- **`403 Forbidden`**: Requester is not a member of the room.
+- **`404 Not Found`**: Unknown room.
+- **`500 Internal Server Error`**: `Failed to fetch execution history`.
 
 ---
 
