@@ -8,6 +8,7 @@ const {
   joinRoomController,
   getRoomInviteController,
   rotateRoomInviteController,
+  listRoomMessagesController,
 } = require('../controllers/roomController');
 
 const router = express.Router();
@@ -70,5 +71,12 @@ router.post('/:roomId/invite', rotateRoomInviteController);
  * @access  Private
  */
 router.post('/:roomId/invite/rotate', rotateRoomInviteController);
+
+/**
+ * @route   GET /api/rooms/:roomId/messages
+ * @desc    Paginated chat history, newest first (members only)
+ * @access  Private
+ */
+router.get('/:roomId/messages', listRoomMessagesController);
 
 module.exports = router;

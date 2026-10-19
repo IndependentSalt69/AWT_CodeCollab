@@ -1,4 +1,5 @@
 const roomService = require('../services/roomService');
+const roomHistoryService = require('../services/roomHistoryService');
 
 function getUserId(req) {
   return req.user?.userId || req.user?.id || req.user?._id;
@@ -99,6 +100,20 @@ async function rotateRoomInviteController(req, res) {
   }
 }
 
+/**
+ * Controller for GET /api/rooms/:roomId/messages
+ * Returns persisted chat history (newest first) to room members.
+ */
+async function listRoomMessagesController(req, res) {
+  try {
+    const room = await roomService.getRoomDetails(req.params.roomId, getUserId(req));
+    const result = await roomHistoryService.listRoomMessages(room.roomId, req.query);
+    return res.status(200).json({ ok: true, ...result });
+  } catch (err) {
+    return sendError(res, err, 'Failed to fetch chat history');
+  }
+}
+
 module.exports = {
   createRoomController,
   listRoomsController,
@@ -106,4 +121,5 @@ module.exports = {
   joinRoomController,
   getRoomInviteController,
   rotateRoomInviteController,
+  listRoomMessagesController,
 };

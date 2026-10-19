@@ -246,6 +246,51 @@ Adds the authenticated user to the persistent membership list of a room using it
 
 ---
 
+### 2.5 Room History Pagination (shared)
+Room history endpoints use cursor pagination:
+
+- Results are ordered **newest first**.
+- `limit` (optional query): integer from 1 to 100. Default 50.
+- `before` (optional query): the `nextCursor` value from the previous page. Returns items older than that item.
+- `nextCursor` in the response is the id to pass as `before` for the next page, or `null` when there are no more items.
+- Invalid `limit` or `before` values return `400 Bad Request`.
+
+Room access follows the same rule as `GET /api/rooms/:roomId`: the caller must be the owner or a member. `:roomId` may be the room's `roomId` or its database `_id`.
+
+---
+
+### 2.6 Chat History
+Returns persisted chat messages for a room. New messages arrive live through the `chat:message_received` socket event; each message has the same `id` in both places.
+
+- **URL:** `GET /api/rooms/:roomId/messages?limit=50&before=<messageId>`
+- **Authentication:** Required (`Bearer <JWT_TOKEN>`)
+
+#### Successful Response (`200 OK`)
+```json
+{
+  "ok": true,
+  "messages": [
+    {
+      "id": "6713a9c2e4b0a1c2d3e4f501",
+      "roomId": "algorithms-practice-f4a2b1",
+      "content": "Let's try the two-pointer approach",
+      "sender": { "id": "67056a1b2c3d4e5f6a7b8c02", "username": "bob" },
+      "timestamp": "2026-10-19T10:00:00.000Z"
+    }
+  ],
+  "nextCursor": null
+}
+```
+
+#### Error Responses
+- **`400 Bad Request`**: Invalid `limit` or `before`.
+- **`401 Unauthorized`**: Missing or invalid token.
+- **`403 Forbidden`**: Requester is not a member of the room.
+- **`404 Not Found`**: Unknown room.
+- **`500 Internal Server Error`**: `Failed to fetch chat history` (details are logged on the server only).
+
+---
+
 ## 3. Execution Endpoints (`/api/execute`)
 
 ### 3.1 Execute Code
