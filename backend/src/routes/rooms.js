@@ -9,6 +9,7 @@ const {
   getRoomInviteController,
   rotateRoomInviteController,
   listRoomMessagesController,
+  listRoomExecutionsController,
 } = require('../controllers/roomController');
 
 const router = express.Router();
@@ -78,5 +79,12 @@ router.post('/:roomId/invite/rotate', rotateRoomInviteController);
  * @access  Private
  */
 router.get('/:roomId/messages', listRoomMessagesController);
+
+/**
+ * @route   GET /api/rooms/:roomId/executions
+ * @desc    Paginated execution history, newest first (members only)
+ * @access  Private
+ */
+router.get('/:roomId/executions', listRoomExecutionsController);
 
 module.exports = router;

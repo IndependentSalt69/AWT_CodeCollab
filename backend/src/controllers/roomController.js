@@ -114,6 +114,20 @@ async function listRoomMessagesController(req, res) {
   }
 }
 
+/**
+ * Controller for GET /api/rooms/:roomId/executions
+ * Returns execution history (newest first) to room members.
+ */
+async function listRoomExecutionsController(req, res) {
+  try {
+    const room = await roomService.getRoomDetails(req.params.roomId, getUserId(req));
+    const result = await roomHistoryService.listRoomExecutions(room.roomId, req.query);
+    return res.status(200).json({ ok: true, ...result });
+  } catch (err) {
+    return sendError(res, err, 'Failed to fetch execution history');
+  }
+}
+
 module.exports = {
   createRoomController,
   listRoomsController,
@@ -122,4 +136,5 @@ module.exports = {
   getRoomInviteController,
   rotateRoomInviteController,
   listRoomMessagesController,
+  listRoomExecutionsController,
 };
