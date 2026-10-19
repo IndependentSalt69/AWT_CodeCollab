@@ -82,10 +82,18 @@ const joinRoomLimiter = createRateLimiter({
   message: 'Too many join room attempts. Please try again later.',
 });
 
+// 10 voice token requests per IP per minute
+const voiceTokenLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: (req, res) => resolveLimit('RATE_LIMIT_VOICE_TOKEN_MAX', 10, 100),
+  message: 'Too many voice token requests. Please try again later.',
+});
+
 module.exports = {
   createRateLimiter,
   loginLimiter,
   registerLimiter,
   executeLimiter,
   joinRoomLimiter,
+  voiceTokenLimiter,
 };

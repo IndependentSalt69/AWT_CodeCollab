@@ -334,6 +334,51 @@ Returns past code runs for a room. Every room member can see every run in the ro
 
 ---
 
+### 2.8 Voice Token (LiveKit)
+Issues a short-lived LiveKit access token so a room member can join the room's voice channel. Audio is handled by LiveKit directly; the backend only checks access and signs the token.
+
+- **URL:** `POST /api/rooms/:roomId/voice-token`
+- **Authentication:** Required (`Bearer <JWT_TOKEN>`)
+- **Rate limit:** 10 requests per IP per minute (`RATE_LIMIT_VOICE_TOKEN_MAX`).
+- **Request body:** none. The voice room and identity come from the server, never from the client.
+
+#### Successful Response (`200 OK`)
+```json
+{
+  "ok": true,
+  "token": "<LiveKit JWT>",
+  "url": "wss://your-project.livekit.cloud",
+  "roomName": "codecollab-algorithms-practice-f4a2b1",
+  "identity": "67056a1b2c3d4e5f6a7b8c01",
+  "expiresIn": 600
+}
+```
+
+- `roomName` is always `codecollab-<roomId>`, so each CodeCollab room has exactly one voice room.
+- `identity` is the CodeCollab user id; the participant display name is the username.
+- The token grants join, publish and subscribe for that one voice room and expires after 10 minutes. It is only needed to connect; an active voice session continues after it expires.
+- The client connects with the LiveKit client SDK using `url` and `token`.
+
+#### Error Responses
+- **`401 Unauthorized`**: Missing or invalid token.
+- **`403 Forbidden`**: Requester is not a member of the room.
+- **`404 Not Found`**: Unknown room.
+- **`429 Too Many Requests`**: Rate limit exceeded.
+- **`503 Service Unavailable`**: `Voice chat is not configured on this server` (LiveKit environment variables are missing).
+
+#### Configuration
+Set these on the backend only. Never expose the API secret to the frontend.
+
+| Variable | Description |
+| :--- | :--- |
+| `LIVEKIT_URL` | LiveKit server WebSocket URL, e.g. `wss://your-project.livekit.cloud` or `ws://localhost:7880` for a local server |
+| `LIVEKIT_API_KEY` | LiveKit API key |
+| `LIVEKIT_API_SECRET` | LiveKit API secret used to sign tokens |
+
+For local testing, run a LiveKit server in dev mode (`livekit-server --dev`, which uses the key `devkey` and secret `secret`), set the variables above, then request a token and join it from the LiveKit client SDK or the LiveKit Meet sample app.
+
+---
+
 ## 3. Execution Endpoints (`/api/execute`)
 
 ### 3.1 Execute Code
