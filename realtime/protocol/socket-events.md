@@ -7,6 +7,7 @@ This document details the Socket.IO event contract between the CodeCollab client
   - Payload: `{ roomId: string, user?: { name?: string, id?: string, username?: string }, token?: string }`
   - Acknowledgment: `{ ok: true, roomId: string, socketId: string }` or `{ ok: false, error: string }`.
   - **Database Room Authorization (M0.8):** For database-backed persistent rooms, joining clients must be authenticated (via handshake or `token` payload) and must be an owner or persistent member of the room. Unauthenticated clients receive `{ ok: false, error: 'Authentication required to join this room' }`. Authenticated non-members receive `{ ok: false, error: 'Access denied: You are not a member of this room' }`.
+  - `roomId` may be the room's `roomId` or its database `_id`. The acknowledgment always returns the canonical `roomId`, and clients must use that value for all later room events and API calls.
   - Every successful join sends a membership snapshot (`room:members`) to the joining socket before acknowledgment.
 - **`room:members`** (Server → Joining Client)
   - Payload: `{ roomId: string, members: Array<{ socketId: string, user: object }> }`

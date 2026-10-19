@@ -90,6 +90,10 @@ module.exports = function registerRoomHandlers(io, socket) {
       return;
     }
 
+    // Key sockets and Driver state by the canonical roomId, even when the client
+    // joined with the database _id, so one room never gets two Drivers.
+    const canonicalRoomId = roomDoc.roomId || roomId;
+
     // 6. Secure identity binding derived strictly from verified state
     const effectiveUser = {
       _id: callerId,
@@ -100,44 +104,44 @@ module.exports = function registerRoomHandlers(io, socket) {
       name: verifiedUser.name || verifiedUser.username || 'Anonymous',
     };
 
-    roomVerifiedUsers.set(roomId, effectiveUser);
-    const alreadyJoined = memberships.has(roomId);
-    memberships.set(roomId, effectiveUser);
-    socket.join(roomId);
+    roomVerifiedUsers.set(canonicalRoomId, effectiveUser);
+    const alreadyJoined = memberships.has(canonicalRoomId);
+    memberships.set(canonicalRoomId, effectiveUser);
+    socket.join(canonicalRoomId);
 
-    const { driverId, isNewDriver } = handleUserJoin(roomId, socket.id, io);
+    const { driverId, isNewDriver } = handleUserJoin(canonicalRoomId, socket.id, io);
 
-    const members = [...(io.sockets.adapter.rooms.get(roomId) || [])]
+    const members = [...(io.sockets.adapter.rooms.get(canonicalRoomId) || [])]
       .map((socketId) => {
         const peer = io.sockets.sockets.get(socketId);
-        return peer?.data.roomMemberships?.has(roomId)
-          ? { socketId, user: peer.data.roomMemberships.get(roomId) }
+        return peer?.data.roomMemberships?.has(canonicalRoomId)
+          ? { socketId, user: peer.data.roomMemberships.get(canonicalRoomId) }
           : null;
       })
       .filter(Boolean);
 
-    socket.emit('room:members', { roomId, members });
+    socket.emit('room:members', { roomId: canonicalRoomId, members });
 
     if (isNewDriver) {
-      io.to(roomId).emit('editor:driver_updated', { driverId, roomId });
+      io.to(canonicalRoomId).emit('editor:driver_updated', { driverId, roomId: canonicalRoomId });
     } else if (driverId) {
-      socket.emit('editor:driver_updated', { driverId, roomId });
+      socket.emit('editor:driver_updated', { driverId, roomId: canonicalRoomId });
     }
 
     callback?.({
       ok: true,
-      roomId,
+      roomId: canonicalRoomId,
       socketId: socket.id,
     });
 
     if (!alreadyJoined) {
-      socket.to(roomId).emit('room:user_joined', {
+      socket.to(canonicalRoomId).emit('room:user_joined', {
         user: effectiveUser,
         socketId: socket.id,
       });
     }
 
-    console.log(`Socket ${socket.id} joined room ${roomId}`);
+    console.log(`Socket ${socket.id} joined room ${canonicalRoomId}`);
   });
 
 
