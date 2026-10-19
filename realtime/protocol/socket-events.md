@@ -107,9 +107,16 @@ This document details the Socket.IO event contract between the CodeCollab client
 
 ## 5. Chat Events
 - **`chat:message_send`** (Client → Server)
-  - Payload: `{ roomId: string, message: { text: string, sender: object } }`
-- **`chat:message_received`** (Server → Room Broadcast)
-  - Payload: `{ text: string, sender: object, timestamp: string, socketId: string }`
+  - Payload: `{ roomId: string, message: string | { text: string } }`
+  - Acknowledgment: `{ ok: true, message: <chat:message_received payload> }` or `{ ok: false, error: string }`.
+  - The sender must have joined `roomId` with `room:join`. Any sender fields in the payload are ignored; the sender is always the authenticated user bound to the socket.
+  - Text is trimmed and must be 1–2000 characters. Each socket may send at most 10 messages per 10 seconds.
+  - The message is saved to the database first and only broadcast once saved. If the database is unavailable or the save fails, the sender gets `{ ok: false }` and nothing is broadcast.
+  - Error messages: `Sender is not a member of the room`, `Message text is required and cannot be empty`, `Message exceeds maximum allowed length of 2000 characters`, `You are sending messages too quickly. Please slow down.`, `Chat is temporarily unavailable`, `Failed to send message`.
+- **`chat:message_received`** (Server → Room Broadcast, including the sender)
+  - Payload: `{ id: string, roomId: string, text: string, content: string, sender: { id, userId, username, name }, user: <same as sender>, timestamp: string (ISO 8601, server time), socketId: string }`
+  - `id` is the persisted message id and matches the `id` returned by `GET /api/rooms/:roomId/messages`, so clients can de-duplicate history against live messages.
+- **History:** Earlier messages are loaded over REST with `GET /api/rooms/:roomId/messages` (see `docs/api-spec.md`).
 
 ## 6. Typing Indicator Events
 - **`typing:start`** (Client → Server)

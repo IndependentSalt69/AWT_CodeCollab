@@ -4,6 +4,7 @@ const jwt = require('jsonwebtoken');
 const mongoose = require('mongoose');
 const { initRealtimeServer } = require('../../realtime/server');
 const Room = require('../../database/models/Room');
+const Message = require('../../database/models/Message');
 const { verifyDriverPermission } = require('../../backend/src/services/executionService');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'test-jwt-secret';
@@ -97,6 +98,12 @@ describe('Security Remediation Batch 1 Regression Suite', () => {
       return Promise.resolve(target);
     });
 
+    jest.spyOn(Message, 'create').mockImplementation(async (doc) => ({
+      _id: new mongoose.Types.ObjectId(),
+      ...doc,
+      createdAt: new Date(),
+    }));
+
     mongoose.connection.readyState = 1;
     server = http.createServer();
     io = initRealtimeServer(server);
@@ -109,6 +116,7 @@ describe('Security Remediation Batch 1 Regression Suite', () => {
     if (Room.findOne.mockRestore) {
       Room.findOne.mockRestore();
     }
+    Message.create.mockRestore();
     await new Promise((resolve) => io.close(resolve));
     await new Promise((resolve) => server.close(resolve));
   });

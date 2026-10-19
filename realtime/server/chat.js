@@ -1,7 +1,28 @@
+const mongoose = require('mongoose');
+const Message = require('../../database/models/Message');
+
 const MAX_MESSAGE_LENGTH = 2000;
 
+// Simple per-socket flood control: at most 10 messages every 10 seconds
+const RATE_LIMIT_WINDOW_MS = 10 * 1000;
+const RATE_LIMIT_MAX_MESSAGES = 10;
+
+function isRateLimited(socket) {
+  const now = Date.now();
+  const recent = (socket.data.chatTimestamps || []).filter(
+    (ts) => now - ts < RATE_LIMIT_WINDOW_MS
+  );
+  if (recent.length >= RATE_LIMIT_MAX_MESSAGES) {
+    socket.data.chatTimestamps = recent;
+    return true;
+  }
+  recent.push(now);
+  socket.data.chatTimestamps = recent;
+  return false;
+}
+
 module.exports = function registerChatHandlers(io, socket) {
-  socket.on('chat:message_send', (payload, callback) => {
+  socket.on('chat:message_send', async (payload, callback) => {
     if (!payload || typeof payload !== 'object') {
       callback?.({ ok: false, error: 'Payload must be an object' });
       return;
@@ -66,28 +87,52 @@ module.exports = function registerChatHandlers(io, socket) {
       return;
     }
 
+    if (isRateLimited(socket)) {
+      callback?.({ ok: false, error: 'You are sending messages too quickly. Please slow down.' });
+      return;
+    }
+
     // 4. Derive sender identity strictly from server-side verified state
     const sender = {
       id: String(verifiedUserId),
       userId: String(verifiedUserId),
       username: verifiedUser.username || verifiedUser.name || 'Anonymous',
       name: verifiedUser.name || verifiedUser.username || 'Anonymous',
-      email: verifiedUser.email || '',
     };
 
+    // 5. Persist before broadcasting so every delivered message is in history
+    if (mongoose.connection.readyState !== 1) {
+      callback?.({ ok: false, error: 'Chat is temporarily unavailable' });
+      return;
+    }
+
+    let saved;
+    try {
+      saved = await Message.create({
+        roomId,
+        sender: sender.id,
+        senderUsername: sender.username,
+        content: text,
+      });
+    } catch (err) {
+      console.error(`[Chat] Failed to save message for room ${roomId}: ${err.message}`);
+      callback?.({ ok: false, error: 'Failed to send message' });
+      return;
+    }
+
     const messagePayload = {
+      id: String(saved._id),
       text,
       content: text,
       sender,
       user: sender,
       roomId,
-      timestamp: new Date().toISOString(),
+      timestamp: new Date(saved.createdAt || Date.now()).toISOString(),
       socketId: socket.id,
     };
 
-    // 5. Broadcast message to room members
+    // 6. Broadcast message to room members
     io.to(roomId).emit('chat:message_received', messagePayload);
     callback?.({ ok: true, message: messagePayload });
   });
 };
-
