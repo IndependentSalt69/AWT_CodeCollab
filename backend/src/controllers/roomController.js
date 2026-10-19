@@ -1,25 +1,33 @@
 const roomService = require('../services/roomService');
 
+function getUserId(req) {
+  return req.user?.userId || req.user?.id || req.user?._id;
+}
+
+/**
+ * Sends an error response. Client errors keep their message; unexpected
+ * server errors are logged and replaced with a generic message.
+ */
+function sendError(res, err, fallbackMessage) {
+  const status = err.status || 500;
+  if (status >= 500) {
+    console.error(`[Rooms] ${fallbackMessage}: ${err.message}`);
+    return res.status(status).json({ ok: false, error: fallbackMessage });
+  }
+  return res.status(status).json({ ok: false, error: err.message || fallbackMessage });
+}
+
 /**
  * Controller for POST /api/rooms
  * Creates a new room. Authenticated user becomes owner & first member.
  */
 async function createRoomController(req, res) {
   try {
-    const userId = req.user?.userId || req.user?.id || req.user?._id;
     const { name, language, isPrivate } = req.body || {};
-
-    const room = await roomService.createRoom({ name, language, isPrivate }, userId);
-    return res.status(201).json({
-      ok: true,
-      room,
-    });
+    const room = await roomService.createRoom({ name, language, isPrivate }, getUserId(req));
+    return res.status(201).json({ ok: true, room });
   } catch (err) {
-    const status = err.status || 500;
-    return res.status(status).json({
-      ok: false,
-      error: err.message || 'Failed to create room',
-    });
+    return sendError(res, err, 'Failed to create room');
   }
 }
 
@@ -29,18 +37,10 @@ async function createRoomController(req, res) {
  */
 async function listRoomsController(req, res) {
   try {
-    const userId = req.user?.userId || req.user?.id || req.user?._id;
-    const rooms = await roomService.listUserRooms(userId);
-    return res.status(200).json({
-      ok: true,
-      rooms,
-    });
+    const rooms = await roomService.listUserRooms(getUserId(req));
+    return res.status(200).json({ ok: true, rooms });
   } catch (err) {
-    const status = err.status || 500;
-    return res.status(status).json({
-      ok: false,
-      error: err.message || 'Failed to list rooms',
-    });
+    return sendError(res, err, 'Failed to list rooms');
   }
 }
 
@@ -50,20 +50,10 @@ async function listRoomsController(req, res) {
  */
 async function getRoomController(req, res) {
   try {
-    const userId = req.user?.userId || req.user?.id || req.user?._id;
-    const { roomId } = req.params;
-
-    const room = await roomService.getRoomDetails(roomId, userId);
-    return res.status(200).json({
-      ok: true,
-      room,
-    });
+    const room = await roomService.getRoomDetails(req.params.roomId, getUserId(req));
+    return res.status(200).json({ ok: true, room });
   } catch (err) {
-    const status = err.status || 500;
-    return res.status(status).json({
-      ok: false,
-      error: err.message || 'Failed to fetch room details',
-    });
+    return sendError(res, err, 'Failed to fetch room details');
   }
 }
 
@@ -74,21 +64,12 @@ async function getRoomController(req, res) {
  */
 async function joinRoomController(req, res) {
   try {
-    const userId = req.user?.userId || req.user?.id || req.user?._id;
     const targetRoomId = req.params.roomId || req.body?.roomId || req.body?.joinCode;
     const inviteCode = req.body?.inviteCode || req.body?.code;
-
-    const room = await roomService.joinRoom(targetRoomId, userId, { inviteCode });
-    return res.status(200).json({
-      ok: true,
-      room,
-    });
+    const room = await roomService.joinRoom(targetRoomId, getUserId(req), { inviteCode });
+    return res.status(200).json({ ok: true, room });
   } catch (err) {
-    const status = err.status || 500;
-    return res.status(status).json({
-      ok: false,
-      error: err.message || 'Failed to join room',
-    });
+    return sendError(res, err, 'Failed to join room');
   }
 }
 
@@ -98,20 +79,10 @@ async function joinRoomController(req, res) {
  */
 async function getRoomInviteController(req, res) {
   try {
-    const userId = req.user?.userId || req.user?.id || req.user?._id;
-    const { roomId } = req.params;
-
-    const inviteCode = await roomService.getRoomInvite(roomId, userId);
-    return res.status(200).json({
-      ok: true,
-      inviteCode,
-    });
+    const inviteCode = await roomService.getRoomInvite(req.params.roomId, getUserId(req));
+    return res.status(200).json({ ok: true, inviteCode });
   } catch (err) {
-    const status = err.status || 500;
-    return res.status(status).json({
-      ok: false,
-      error: err.message || 'Failed to fetch invite code',
-    });
+    return sendError(res, err, 'Failed to fetch invite code');
   }
 }
 
@@ -121,20 +92,10 @@ async function getRoomInviteController(req, res) {
  */
 async function rotateRoomInviteController(req, res) {
   try {
-    const userId = req.user?.userId || req.user?.id || req.user?._id;
-    const { roomId } = req.params;
-
-    const inviteCode = await roomService.rotateRoomInvite(roomId, userId);
-    return res.status(200).json({
-      ok: true,
-      inviteCode,
-    });
+    const inviteCode = await roomService.rotateRoomInvite(req.params.roomId, getUserId(req));
+    return res.status(200).json({ ok: true, inviteCode });
   } catch (err) {
-    const status = err.status || 500;
-    return res.status(status).json({
-      ok: false,
-      error: err.message || 'Failed to rotate invite code',
-    });
+    return sendError(res, err, 'Failed to rotate invite code');
   }
 }
 

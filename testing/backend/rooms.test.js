@@ -440,7 +440,8 @@ describe('Backend Room Management API & Database Persistence (M0.8)', () => {
 
       expect(res.status).toBe(500);
       expect(res.body.ok).toBe(false);
-      expect(res.body.error).toContain('MongoDB connection timeout');
+      expect(res.body.error).toBe('Failed to create room');
+      expect(res.body.error).not.toContain('MongoDB');
 
       saveSpy.mockRestore();
     });
@@ -456,7 +457,8 @@ describe('Backend Room Management API & Database Persistence (M0.8)', () => {
 
       expect(res.status).toBe(500);
       expect(res.body.ok).toBe(false);
-      expect(res.body.error).toContain('Database query failure');
+      expect(res.body.error).toBe('Failed to list rooms');
+      expect(res.body.error).not.toContain('Database query failure');
 
       findSpy.mockRestore();
     });
