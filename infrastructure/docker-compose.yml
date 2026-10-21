@@ -14,6 +14,9 @@ services:
       - JWT_SECRET=${JWT_SECRET}
       - CLIENT_URL=${CLIENT_URL:-http://localhost:3000}
       - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - LIVEKIT_URL=${LIVEKIT_URL:-}
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY:-}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET:-}
     networks:
       - app-network
     depends_on:

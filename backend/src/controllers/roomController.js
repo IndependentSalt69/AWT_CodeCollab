@@ -1,17 +1,18 @@
 const roomService = require('../services/roomService');
 const roomHistoryService = require('../services/roomHistoryService');
+const voiceService = require('../services/voiceService');
 
 function getUserId(req) {
   return req.user?.userId || req.user?.id || req.user?._id;
 }
 
 /**
- * Sends an error response. Client errors keep their message; unexpected
- * server errors are logged and replaced with a generic message.
+ * Sends an error response. Intentional errors (4xx, 503) keep their message;
+ * unexpected server errors are logged and replaced with a generic message.
  */
 function sendError(res, err, fallbackMessage) {
   const status = err.status || 500;
-  if (status >= 500) {
+  if (status === 500) {
     console.error(`[Rooms] ${fallbackMessage}: ${err.message}`);
     return res.status(status).json({ ok: false, error: fallbackMessage });
   }
@@ -128,6 +129,25 @@ async function listRoomExecutionsController(req, res) {
   }
 }
 
+/**
+ * Controller for POST /api/rooms/:roomId/voice-token
+ * Issues a short-lived voice token to room members.
+ */
+async function createVoiceTokenController(req, res) {
+  try {
+    const userId = getUserId(req);
+    const room = await roomService.getRoomDetails(req.params.roomId, userId);
+    const voice = voiceService.createVoiceToken({
+      roomId: room.roomId,
+      userId,
+      username: req.user?.username,
+    });
+    return res.status(200).json({ ok: true, ...voice });
+  } catch (err) {
+    return sendError(res, err, 'Failed to create voice token');
+  }
+}
+
 module.exports = {
   createRoomController,
   listRoomsController,
@@ -137,4 +157,5 @@ module.exports = {
   rotateRoomInviteController,
   listRoomMessagesController,
   listRoomExecutionsController,
+  createVoiceTokenController,
 };

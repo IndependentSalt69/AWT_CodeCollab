@@ -1,6 +1,6 @@
 const express = require('express');
 const { authenticate } = require('../middleware/auth');
-const { joinRoomLimiter } = require('../middleware/rateLimiter');
+const { joinRoomLimiter, voiceTokenLimiter } = require('../middleware/rateLimiter');
 const {
   createRoomController,
   listRoomsController,
@@ -10,6 +10,7 @@ const {
   rotateRoomInviteController,
   listRoomMessagesController,
   listRoomExecutionsController,
+  createVoiceTokenController,
 } = require('../controllers/roomController');
 
 const router = express.Router();
@@ -86,5 +87,12 @@ router.get('/:roomId/messages', listRoomMessagesController);
  * @access  Private
  */
 router.get('/:roomId/executions', listRoomExecutionsController);
+
+/**
+ * @route   POST /api/rooms/:roomId/voice-token
+ * @desc    Issue a short-lived LiveKit voice token (members only, rate-limited)
+ * @access  Private
+ */
+router.post('/:roomId/voice-token', voiceTokenLimiter, createVoiceTokenController);
 
 module.exports = router;
