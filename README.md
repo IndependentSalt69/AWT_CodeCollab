@@ -130,62 +130,31 @@ CodeCollab/
 ## Getting Started
 
 ### Prerequisites
-- [Node.js](https://nodejs.org/) v18+
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/)
-- [MongoDB](https://www.mongodb.com/) (local or Atlas)
-- [Redis](https://redis.io/) (local or via Docker)
-- Git
+- Windows PowerShell
+- Docker Desktop configured for Linux containers
+- Internet access for initial image pulls and builds
+- Git, if you need to clone or update the repository
+- Node.js 18+ only for host-based development commands and tests
 
-### Installation
+MongoDB and Redis are started by Docker Compose; they do not need to be installed separately for this workflow.
 
-```bash
-# Clone the repository
-git clone https://github.com/IndependentSalt69/AWT_2026.git
-cd AWT_2026
+### First-Time Setup and Startup (Windows / PowerShell)
 
-# Install backend dependencies
-cd backend
-npm install
+Open PowerShell in the repository root (`AWT_2026`) and run these commands in order: `.\setup.ps1`, `.\start.ps1`, then `.\verify.ps1`.
 
-# Install frontend dependencies
-cd ../frontend
-npm install
-```
+- **`setup.ps1`** creates `infrastructure\.env` with unique local secrets if the file is missing. It preserves an existing file. Keep the file private and never commit it.
+- **`start.ps1`** builds the application and Python, C++, and Java runner images before changing the running stack. It transfers the runner images to the isolated execution daemon, verifies them, and starts the execution worker.
+- **`verify.ps1`** checks all six Compose services, the frontend and backend HTTP endpoints, and all three runner images inside the execution daemon. It is read-only and does not start, stop, or rebuild services.
 
-### Environment Variables
+Open **http://localhost:3000** on the same laptop. The backend health endpoint is **http://localhost:5000/health**.
 
-Create a `.env` file based on `infrastructure/.env.example`:
+If startup fails, read the first reported error before retrying. Check that Docker Desktop is running and configured for Linux containers. Initial builds require network access to image registries and package repositories.
 
-```env
-PORT=5000
-MONGO_URI=mongodb://localhost:27017/codecollab
-JWT_SECRET=your_jwt_secret
-REDIS_URL=redis://localhost:6379
-CLIENT_URL=http://localhost:3000
-```
+### Local Development and Multi-Device Testing
 
-### Running Locally
+This Docker Desktop configuration is for trusted local development. It warns that inner cgroup enforcement is not production-qualified; passing local health checks does not prove production sandbox security.
 
-```bash
-# Start backend
-cd backend
-npm run dev
-
-# Start frontend (in a separate terminal)
-cd frontend
-npm run dev
-```
-
-Or, using Docker Compose from the infrastructure directory:
-
-```bash
-docker-compose -f infrastructure/docker-compose.yml up --build
-```
-
-Visit `http://localhost:3000` to use the app.
-
----
-
+Do not expose this development stack to the public internet. On another device, `localhost` refers to that device, not the CodeCollab laptop. LAN access may require configuring the frontend API and realtime URLs, along with the backend's allowed client origin. Keep the execution daemon API (ports 2375/2376), MongoDB, and Redis private; do not expose them to the LAN.
 ## Running Tests
 
 ```bash
