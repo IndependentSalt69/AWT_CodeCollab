@@ -73,6 +73,7 @@ describe('POST /api/rooms/:roomId/voice-token', () => {
       .set('Authorization', `Bearer ${tokenAlice}`);
 
     expect(res.status).toBe(503);
+    expect(res.body.error).toBe('Voice chat is not configured on this server');
     expect(res.body.token).toBeUndefined();
   });
 

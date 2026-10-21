@@ -7,12 +7,12 @@ function getUserId(req) {
 }
 
 /**
- * Sends an error response. Client errors keep their message; unexpected
- * server errors are logged and replaced with a generic message.
+ * Sends an error response. Intentional errors (4xx, 503) keep their message;
+ * unexpected server errors are logged and replaced with a generic message.
  */
 function sendError(res, err, fallbackMessage) {
   const status = err.status || 500;
-  if (status >= 500) {
+  if (status === 500) {
     console.error(`[Rooms] ${fallbackMessage}: ${err.message}`);
     return res.status(status).json({ ok: false, error: fallbackMessage });
   }
