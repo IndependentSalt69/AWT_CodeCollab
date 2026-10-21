@@ -57,6 +57,17 @@ $originalErrorActionPreference = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'
 
 try {
+    # Build runner images first so build/network failures happen before the app stack is changed.
+    foreach ($language in $runnerLanguages) {
+        $runnerImage = "codecollab-runner-${language}:latest"
+        $runnerDockerfile = Join-Path $repoRoot "execution/runners/$language/Dockerfile"
+        $runnerContext = Join-Path $repoRoot 'execution/runners'
+        if ($language -eq 'python') { $runnerContext = Join-Path $runnerContext 'python' }
+        Write-Host "Building $language runner image..." -ForegroundColor Cyan
+        & docker build -t $runnerImage -f $runnerDockerfile $runnerContext
+        if ($LASTEXITCODE -ne 0) { throw "Failed to build the $language runner image." }
+    }
+
     # Explicitly target the app services and the nested daemon, but not the worker yet.
     & docker compose @composeBase up -d --build mongo redis backend frontend execution-daemon
     if ($LASTEXITCODE -ne 0) {
@@ -76,16 +87,6 @@ try {
     if (-not $daemonReady) {
         & docker compose @composeBase logs --tail 80 execution-daemon
         throw 'Execution daemon did not become ready within 90 seconds. Worker was not started.'
-    }
-
-    foreach ($language in $runnerLanguages) {
-        $runnerImage = "codecollab-runner-${language}:latest"
-        $runnerDockerfile = Join-Path $repoRoot "execution/runners/$language/Dockerfile"
-        $runnerContext = Join-Path $repoRoot 'execution/runners'
-        if ($language -eq 'python') { $runnerContext = Join-Path $runnerContext 'python' }
-        Write-Host "Building $language runner image..." -ForegroundColor Cyan
-        & docker build -t $runnerImage -f $runnerDockerfile $runnerContext
-        if ($LASTEXITCODE -ne 0) { throw "Failed to build the $language runner image." }
     }
 
     Write-Host 'Transferring all runner images into the isolated execution daemon...' -ForegroundColor Cyan
